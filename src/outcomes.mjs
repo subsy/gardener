@@ -168,19 +168,21 @@ export async function windowOutcomes(cwd, config, since, until, cache) {
     rework(cwd, evenSample(commits, sampleSize), config, { cache }),
     rework(cwd, evenSample(fixes, sampleSize), config, { cache }),
   ]);
+  // A share of a handful of commits or lines is noise: one fix in a quiet week reads 100%.
+  const enough = total >= config.minCommits;
+  const shareOf = (n) => (enough ? n / total : null);
+  const floor = (r) => ({ ...r, share: r.lines >= config.minReworkLines ? r.share : null });
   return {
     since,
     until,
     commits: total,
     byType,
-    fixShare: total ? (byType.fix ?? 0) / total : null,
-    cleanupShare: total
-      ? ((byType.refactor ?? 0) + otherDeleting) / total
-      : null,
+    fixShare: shareOf(byType.fix ?? 0),
+    cleanupShare: shareOf((byType.refactor ?? 0) + otherDeleting),
     lines: { added, deleted, net: added - deleted },
-    netDeletingShare: total ? netDeleting / total : null,
-    rework: allRework,
-    fixRework,
+    netDeletingShare: shareOf(netDeleting),
+    rework: floor(allRework),
+    fixRework: floor(fixRework),
     reworkSampled: {
       all: Math.min(total, sampleSize),
       fix: Math.min(fixes.length, sampleSize),
@@ -248,7 +250,8 @@ export function shareSignal(before, after, minLines = 200) {
 }
 
 /**
- * Combines signals into a result, in the same terms DevTune uses for measured actions.
+ * Combines signals into a result: improved, mixed, declined, no clear change, still
+ * measuring or unmeasured.
  * The windows show what moved on the touched files, not what caused it.
  */
 export function verdict(signals, complete) {

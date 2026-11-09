@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ABOUTME: `garden` command line. Measures the health of the repository it runs in:
+ * ABOUTME: `gardener` command line. Measures the health of the repository it runs in:
  * snapshot (code state of a commit), window (outcomes over recent days), hotspots,
  * compare (before/after for one PR or commit) and history (weekly trend, optional HTML).
  */
@@ -29,7 +29,7 @@ import {
 } from './sources.mjs';
 import { cachedSnapshot, snapshot } from './state.mjs';
 
-const USAGE = `Usage: garden <command> [options]
+const USAGE = `Usage: gardener <command> [options]
 
 Commands
   snapshot [rev]        Code state of a commit (default: the configured branch)
@@ -43,12 +43,12 @@ Options
   --weeks <n>           Weeks of history
   --limit <n>           Hotspot rows (default 20)
   --github              Add merged-PR review load (needs the gh CLI)
-  --transcripts         Add agent push time from Claude Code transcripts
+  --transcripts         Add agent push time from Claude Code and Codex transcripts
   --html <file>         history: write the trend charts as a self-contained page
   --markdown            compare: print Markdown for a PR comment
   --json                Print raw JSON
-  --branch <ref>        Override the configured branch
-  --config <file>       Config file (default: garden.config.json at the repo root)
+  --branch <ref>        Branch to measure (default: origin/HEAD, else HEAD)
+  --config <file>       Config file (default: gardener.config.json at the repo root)
   --no-cache            Recompute everything
 `;
 
@@ -180,6 +180,6 @@ async function compare(cwd, config, target, days, now) {
 }
 
 main().catch((error) => {
-  process.stderr.write(`garden: ${error.message}\n`);
+  process.stderr.write(`gardener: ${error.message}\n`);
   process.exit(1);
 });

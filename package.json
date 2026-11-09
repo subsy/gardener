@@ -1,13 +1,35 @@
 {
-  "name": "@devtune/garden",
-  "private": true,
+  "name": "@subsy/gardener",
   "version": "0.1.0",
-  "description": "Measures codebase health from git history: code state per commit, outcomes per window, hotspots and before/after for interventions.",
+  "description": "Measure whether a fast-moving, agent-written codebase is getting healthier, from git history alone.",
   "type": "module",
   "bin": {
-    "garden": "./src/cli.mjs"
+    "gardener": "./src/cli.mjs"
+  },
+  "files": [
+    "src/*.mjs",
+    "!src/*.test.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5"
   },
   "scripts": {
-    "test:run": "node --test 'src/*.test.mjs'"
-  }
+    "test": "node --test 'src/*.test.mjs'"
+  },
+  "keywords": [
+    "code-health",
+    "technical-debt",
+    "git",
+    "hotspots",
+    "ai-agents",
+    "claude-code",
+    "codex"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/subsy/gardener.git"
+  },
+  "license": "MIT"
 }

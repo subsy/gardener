@@ -1,5 +1,5 @@
 /**
- * ABOUTME: Thin git plumbing for the garden harness. Every read goes through the object
+ * ABOUTME: Thin git plumbing for gardener. Every read goes through the object
  * store (ls-tree, cat-file, log, blame) so any historical commit can be measured without a
  * checkout.
  */

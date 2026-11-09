@@ -26,7 +26,7 @@ export function openCache(cwd, kind, config, { disabled = false } = {}) {
   const common = git(cwd, ['rev-parse', '--git-common-dir']).trim();
   const dir = join(
     isAbsolute(common) ? common : join(cwd, common),
-    'garden-cache',
+    'gardener-cache',
   );
   const file = join(dir, `${kind}-${config.cacheKeys[kind]}.json`);
   const entries = readEntries(file);

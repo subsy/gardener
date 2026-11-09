@@ -1,5 +1,5 @@
 /**
- * ABOUTME: Behaviour tests for the garden harness, run against throwaway git repositories
+ * ABOUTME: Behaviour tests for gardener, run against throwaway git repositories
  * with controlled commit dates and real transcript files. No mocks: every number comes from
  * the same git plumbing the CLI uses.
  */
@@ -31,7 +31,7 @@ const roots = [];
 after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 
 function repo() {
-  const root = mkdtempSync(join(tmpdir(), 'garden-test-'));
+  const root = mkdtempSync(join(tmpdir(), 'gardener-test-'));
   roots.push(root);
   const run = (args, env = {}) =>
     execFileSync('git', args, {
@@ -40,8 +40,8 @@ function repo() {
       encoding: 'utf8',
     });
   run(['init', '-q', '-b', 'main']);
-  run(['config', 'user.email', 'garden@example.com']);
-  run(['config', 'user.name', 'Garden']);
+  run(['config', 'user.email', 'gardener@example.com']);
+  run(['config', 'user.name', 'Gardener']);
   run(['config', 'commit.gpgsign', 'false']);
   return {
     root,
@@ -69,7 +69,7 @@ const lines = (n, prefix = 'line') =>
     '\n',
   ) + '\n';
 const config = (extra = {}) =>
-  resolveConfig({ branch: 'main', reworkSample: 1000, ...extra });
+  resolveConfig({ branch: 'main', reworkSample: 1000, minCommits: 1, minReworkLines: 1, ...extra });
 
 describe('snapshot', () => {
   test('counts size, escapes, suppressions and test weight, skipping ignored and generated files', () => {
@@ -260,6 +260,12 @@ describe('outcomes', () => {
     assert.equal(o.fixShare, 1);
     assert.deepEqual(o.rework, { lines: 4, recent: 2, share: 0.5 });
     assert.equal(o.netDeletingShare, 0.5);
+
+    // With the default floors, two commits and four rewritten lines are too few to report.
+    const quiet = await windowOutcomes(r.root, resolveConfig({ branch: 'main' }), T0 + 29 * DAY, T0 + 32 * DAY);
+    assert.equal(quiet.fixShare, null);
+    assert.equal(quiet.rework.share, null);
+    assert.equal(quiet.rework.lines, 4);
   });
 
   test('hotspots rank repeatedly fixed files by fixes and size', () => {
@@ -493,7 +499,7 @@ describe('window report', () => {
 
 describe('push transcripts', () => {
   test('foreground pushes are timed once each, across resumed copies of a session', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'garden-tx-'));
+    const root = mkdtempSync(join(tmpdir(), 'gardener-tx-'));
     roots.push(root);
     const at = (s) => new Date((T0 + s) * 1000).toISOString();
     const use = (id, command, s, input = {}) =>
@@ -536,24 +542,35 @@ describe('push transcripts', () => {
       session.replaceAll('p1', 'q1'),
     );
 
-    const pushes = await pushOutcomes(
-      { claudeProjectsDir: root, match: 'myrepo' },
-      T0 - DAY,
-      T0 + DAY,
+    const codex = join(root, 'codex', '2026', '01', '05');
+    mkdirSync(codex, { recursive: true });
+    const exec = (id, command, cwd, endS, secs, exitCode) =>
+      JSON.stringify({
+        timestamp: at(endS),
+        type: 'event_msg',
+        payload: {
+          type: 'item_completed',
+          item: { type: 'CommandExecution', id, command: ['/usr/bin/zsh', '-lc', command], cwd: `file://${cwd}`, exit_code: exitCode, duration: { secs, nanos: 0 } },
+        },
+      });
+    writeFileSync(
+      join(codex, 'rollout-1.jsonl'),
+      [
+        exec('c1', 'git -C /home/me/myrepo-wt push origin HEAD', '/home/me/myrepo-wt', 1000, 120, 0),
+        exec('c2', 'git push', '/home/me/otherrepo', 1100, 50, 0),
+        exec('c3', 'git status', '/home/me/myrepo-wt', 1200, 1, 0),
+      ].join('\n'),
     );
+    const transcripts = { claudeProjectsDir: root, codexSessionsDir: join(root, 'codex'), match: 'myrepo' };
+
+    const pushes = await pushOutcomes(transcripts, T0 - DAY, T0 + DAY);
     assert.deepEqual(pushes, {
-      pushes: 2,
-      medianSeconds: 300,
+      pushes: 3,
+      byAgent: { claude: 2, codex: 1 },
+      medianSeconds: 120,
       p90Seconds: 300,
-      failureShare: 0.5,
+      failureShare: 1 / 3,
     });
-    assert.equal(
-      await pushOutcomes(
-        { claudeProjectsDir: root, match: 'nothing' },
-        T0 - DAY,
-        T0 + DAY,
-      ),
-      null,
-    );
+    assert.equal(await pushOutcomes({ ...transcripts, match: 'nothing' }, T0 - DAY, T0 + DAY), null);
   });
 });

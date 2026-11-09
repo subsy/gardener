@@ -1,20 +1,23 @@
 /**
- * ABOUTME: Loads garden.config.json from the repository root and merges it over generic
+ * ABOUTME: Loads gardener.config.json from the repository root and merges it over generic
  * defaults. The config is the only repo-specific part of the harness: which paths are code,
  * tests, generated or churn noise, and the size limits that count as large.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, matchesGlob } from 'node:path';
+import { basename, dirname, join, matchesGlob } from 'node:path';
+
+import { git } from './git.mjs';
 
 const CODE = '**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}';
 
 // Bump when a code change alters what a cached snapshot or rework result contains.
-const SNAPSHOT_VERSION = 5;
+const SNAPSHOT_VERSION = 6;
 const REWORK_VERSION = 2;
 
 export const DEFAULTS = {
-  branch: 'origin/main',
+  // null: the remote's default branch (origin/HEAD), else HEAD.
+  branch: null,
   code: [CODE],
   tests: [
     `**/*.{test,spec}.{ts,tsx,js,jsx,mjs,cjs,mts,cts}`,
@@ -31,7 +34,10 @@ export const DEFAULTS = {
     '**/*.d.ts',
     '**/*.min.js',
     '**/generated/**',
+    '**/_generated/**',
+    '**/__generated__/**',
     '**/*.generated.*',
+    '**/*.gen.*',
   ],
   // Measured for size, but left out of churn, hotspots and rework: files every change touches.
   churnIgnore: [
@@ -45,6 +51,9 @@ export const DEFAULTS = {
   largeFileLines: 800,
   reworkDays: 14,
   reworkSample: 150,
+  // Below these, a window's shares read as unmeasured rather than as a percentage of noise.
+  minCommits: 5,
+  minReworkLines: 100,
   // compare: touched files this share of all commits also change are too shared to attribute.
   sharedFileShare: 0.05,
   patterns: {
@@ -68,18 +77,44 @@ export const DEFAULTS = {
     assertions: String.raw`\bexpect\(`,
   },
   sql: null,
-  transcripts: { claudeProjectsDir: '~/.claude/projects', match: null },
+  // match null: the repository's directory name, which both agents record in their paths.
+  transcripts: {
+    claudeProjectsDir: '~/.claude/projects',
+    codexSessionsDir: '~/.codex/sessions',
+    match: null,
+  },
 };
 
 const digest = (value) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 12);
 
-/** Reads `<root>/garden.config.json` (or `path`) and returns the resolved config. */
+/**
+ * Reads `<root>/gardener.config.json` (or `path`) and returns the resolved config, filling
+ * the branch and transcript match from the repository when the file leaves them unset.
+ */
 export function loadConfig(root, path) {
-  const file = path ?? join(root, 'garden.config.json');
+  const file = path ?? join(root, 'gardener.config.json');
   const user = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-  return resolveConfig(user);
+  const config = resolveConfig(user);
+  config.branch ??= defaultBranch(root);
+  config.transcripts.match ??= repoName(root);
+  return config;
 }
+
+/** The remote's default branch as a ref (origin/main, origin/master), else HEAD. */
+export function defaultBranch(root) {
+  try {
+    return git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).trim();
+  } catch {
+    return 'HEAD';
+  }
+}
+
+// Worktrees live in their own directories; the shared git dir names the repository.
+const repoName = (root) => {
+  const common = git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+  return basename(common.endsWith('.git') ? dirname(common) : common);
+};
 
 /** Merges a user config over the defaults: glob lists extend, `patterns` merges one level deep. */
 export function resolveConfig(user) {
