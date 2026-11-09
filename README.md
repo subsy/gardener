@@ -12,7 +12,10 @@ stands, which parts keep needing repair, and whether a cleanup you shipped actua
 npx repo-gardener history --weeks 26 --html garden.html
 ```
 
-The idea comes from Theo's "[Coding isn't about code anymore](https://www.youtube.com/watch?v=GtJKFhztgdM)":
+The name comes from [Lauren Tan (poteto)](https://x.com/poteto/status/2090546476464451907):
+every team needs a gardener, someone quietly watching the stream of PRs, noticing the
+smells, and pulling the weeds (lint suppressions creeping like ivy) before slop takes over.
+Theo then made the case at length in "[Coding isn't about code anymore](https://www.youtube.com/watch?v=GtJKFhztgdM)":
 with agents writing the code, the engineer's job is keeping the garden healthy, which means
 pulling weeds as they appear, fixing what made them grow, and putting stakes in that steer
 new growth the right way. You can't tend what you can't see, and gardener is the seeing part.
