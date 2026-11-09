@@ -1,0 +1,13 @@
+{
+  "name": "@devtune/garden",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Measures codebase health from git history: code state per commit, outcomes per window, hotspots and before/after for interventions.",
+  "type": "module",
+  "bin": {
+    "garden": "./src/cli.mjs"
+  },
+  "scripts": {
+    "test:run": "node --test 'src/*.test.mjs'"
+  }
+}
