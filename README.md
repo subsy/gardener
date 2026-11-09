@@ -5,10 +5,11 @@ When agents write most of your code, the codebase can rot faster than anyone can
 history alone, and tells you whether each cleanup you ship actually helped.
 
 ```bash
-npx @subsy/gardener history --weeks 26 --html garden.html
+npx repo-gardener history --weeks 26 --html garden.html
 ```
 
-Run it at the root of any git repository. Nothing is uploaded: it reads git objects, plus
+Run it at the root of any git repository, or install it with `npm i -g repo-gardener` and run
+`gardener`. Nothing is uploaded: it reads git objects, plus
 the GitHub API and local agent transcripts when you ask it to.
 
 ## What you get

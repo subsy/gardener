@@ -1,10 +1,11 @@
 {
-  "name": "@subsy/gardener",
+  "name": "repo-gardener",
   "version": "0.1.0",
   "description": "Measure whether a fast-moving, agent-written codebase is getting healthier, from git history alone.",
   "type": "module",
   "bin": {
-    "gardener": "./src/cli.mjs"
+    "gardener": "./src/cli.mjs",
+    "repo-gardener": "./src/cli.mjs"
   },
   "files": [
     "src/*.mjs",
