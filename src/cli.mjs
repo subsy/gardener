@@ -45,6 +45,7 @@ Options
   --github              Add merged-PR review load (needs the gh CLI)
   --transcripts         Add agent push time from Claude Code and Codex transcripts
   --html <file>         history: write the trend charts as a self-contained page
+  --theme <name>        history: page theme, auto (default), dark or light
   --markdown            compare: print Markdown for a PR comment
   --json                Print raw JSON
   --branch <ref>        Branch to measure (default: origin/HEAD, else HEAD)
@@ -71,6 +72,7 @@ async function main() {
       github: { type: 'boolean', default: false },
       transcripts: { type: 'boolean', default: false },
       html: { type: 'string' },
+      theme: { type: 'string' },
       markdown: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       branch: { type: 'string' },
@@ -137,7 +139,8 @@ async function main() {
       now,
       onWeek: (row) => process.stderr.write(`measured ${row.week}\n`),
     });
-    if (values.html) writeFileSync(values.html, historyHtml(rows));
+    if (values.html)
+      writeFileSync(values.html, historyHtml(rows, { theme: values.theme }));
     print(rows, () => formatHistory(rows));
   } else {
     throw new Error(`unknown command: ${command}\n\n${USAGE}`);

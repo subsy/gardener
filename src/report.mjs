@@ -13,7 +13,8 @@ const ratio = (a, b) => (a == null || !b ? null : a / b);
 
 /**
  * The trend metrics. `better` is the healthy direction ('down', 'up' or null for volume);
- * `bars` marks per-week volumes, drawn as bars rather than lines.
+ * `bars` marks per-week volumes, drawn as bars rather than lines; `tableOnly` keeps a close
+ * variant of another metric out of the chart grid and in the table.
  */
 export const METRICS = [
   {
@@ -29,6 +30,7 @@ export const METRICS = [
     get: (r) => r.state.largeFiles.lines,
     fmt: int,
     better: 'down',
+    tableOnly: true,
   },
   {
     key: 'sourceLines',
@@ -114,6 +116,7 @@ export const METRICS = [
     get: (r) => r.outcomes.fixRework.share,
     fmt: pct,
     better: 'down',
+    tableOnly: true,
   },
   {
     key: 'afterReview',
@@ -374,42 +377,51 @@ const escapeHtml = (s) =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
   );
 
-/** Self-contained HTML page: one small chart per metric over the weekly rows. */
-export function historyHtml(rows, { title = 'Garden health' } = {}) {
+/**
+ * Self-contained HTML page: one small chart per metric over the weekly rows, with a table of
+ * every metric underneath. `theme` is 'auto' (follows the viewer's system), 'dark' or
+ * 'light'; `note` is appended to the line under the title.
+ */
+export function historyHtml(rows, { title = 'Garden health', note = '', theme = 'auto' } = {}) {
   const series = METRICS.map((m) => ({
-    key: m.key,
     label: m.label,
     better: m.better,
     bars: Boolean(m.bars),
+    tableOnly: Boolean(m.tableOnly),
     values: rows.map((r) => m.get(r)),
     shown: rows.map((r) => show(m, m.get(r))),
   })).filter((s) => s.values.some((v) => v != null));
   const weeks = rows.map((r) => r.week);
-  const data = JSON.stringify({ weeks, series }).replace(/</g, '\\u003c');
+  const charted = series.filter((s) => !s.tableOnly);
+  const data = JSON.stringify({ weeks, series: charted }).replace(/</g, '\\u003c');
   const tableRows = rows
     .map(
       (r, i) =>
         `<tr><th scope="row">${escapeHtml(r.week)}</th>${series.map((s) => `<td>${escapeHtml(s.shown[i])}</td>`).join('')}</tr>`,
     )
     .join('');
+  const dark =
+    'color-scheme:dark;--surface-1:#0e0e0e;--surface-2:#171717;--text-primary:#f0efec;--text-secondary:#b9b8ae;--text-muted:#8b8a82;--grid:#2c2c2a;--series-1:#3987e5;--good:#3fb950;--bad:#f0605d';
+  const themeAttr = theme === 'dark' || theme === 'light' ? ` data-theme="${theme}"` : '';
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <style>
 .viz-root{color-scheme:light;--surface-1:#fcfcfb;--surface-2:#f3f2ef;--text-primary:#0b0b0b;--text-secondary:#52514e;--text-muted:#76756f;--grid:#e4e3de;--series-1:#2a78d6;--good:#008300;--bad:#c0392b}
-@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .viz-root{color-scheme:dark;--surface-1:#1a1a19;--surface-2:#232322;--text-primary:#f0efec;--text-secondary:#c3c2b7;--text-muted:#9a998f;--grid:#33332f;--series-1:#3987e5;--good:#4caf50;--bad:#e66767}}
-:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface-1:#1a1a19;--surface-2:#232322;--text-primary:#f0efec;--text-secondary:#c3c2b7;--text-muted:#9a998f;--grid:#33332f;--series-1:#3987e5;--good:#4caf50;--bad:#e66767}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .viz-root{${dark}}}
+:root[data-theme="dark"] .viz-root{${dark}}
 body{margin:0}
 .viz-root{background:var(--surface-1);color:var(--text-primary);font:14px/1.4 system-ui,sans-serif;padding:24px;min-height:100vh;box-sizing:border-box}
 h1{font-size:20px;margin:0 0 4px}
 .sub{color:var(--text-secondary);margin:0 0 20px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
-.card{background:var(--surface-2);border-radius:8px;padding:12px 14px;position:relative}
+.card{background:var(--surface-2);border-radius:10px;padding:16px 18px 12px;position:relative}
 .card h2{font-size:13px;font-weight:600;margin:0;color:var(--text-secondary)}
-.now{font-size:22px;font-weight:600;margin:2px 0 0}
-.delta{font-size:12px;color:var(--text-muted);margin:0 0 6px}
+.now{font-size:24px;font-weight:600;margin:6px 0 0;font-variant-numeric:tabular-nums}
+.delta{font-size:12px;color:var(--text-muted);margin:2px 0 10px}
 .delta .good{color:var(--good)}.delta .bad{color:var(--bad)}
-svg{display:block;width:100%;height:120px;overflow:visible}
+svg{display:block;width:100%;height:110px;overflow:visible}
+.axis{display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-top:4px}
 .tip{position:absolute;pointer-events:none;background:var(--surface-1);color:var(--text-primary);border:1px solid var(--grid);border-radius:6px;padding:4px 8px;font-size:12px;white-space:nowrap;display:none;z-index:2}
 details{margin-top:24px}
 table{border-collapse:collapse;font-size:12px;margin-top:8px}
@@ -418,64 +430,69 @@ th[scope=row],thead th:first-child{text-align:left}
 </style></head>
 <body><div class="viz-root">
 <h1>${escapeHtml(title)}</h1>
-<p class="sub">Weekly, ${escapeHtml(weeks[0] ?? '')} to ${escapeHtml(weeks.at(-1) ?? '')}. Code state at each week's last commit; outcomes over the week. Gaps are weeks a source doesn't cover.</p>
+<p class="sub">Weekly, ${escapeHtml(weeks[0] ?? '')} to ${escapeHtml(weeks.at(-1) ?? '')}. Code state at each week's last commit; outcomes over the week. Gaps are weeks a source doesn't cover.${note ? ` ${escapeHtml(note)}` : ''}</p>
 <div class="grid" id="grid"></div>
 <details><summary>Table view</summary><table><thead><tr><th>Week</th>${series.map((s) => `<th>${escapeHtml(s.label)}</th>`).join('')}</tr></thead><tbody>${tableRows}</tbody></table></details>
 </div>
 <script>
 const {weeks, series} = ${data};
-const W = 300, H = 120, PAD = {l: 4, r: 4, t: 8, b: 18};
+const H = 110, PAD = {l: 4, r: 6, t: 8, b: 4}, ns = 'http://www.w3.org/2000/svg';
 const grid = document.getElementById('grid');
-for (const s of series) {
+const charts = series.map((s) => {
   const card = document.createElement('div'); card.className = 'card';
   const present = s.values.map((v, i) => [i, v]).filter(([, v]) => v != null);
   const [fi, fv] = present[0]; const [li, lv] = present.at(-1);
   let deltaText = 'since ' + weeks[fi];
-  let cls = '';
   if (present.length > 1 && fv !== 0) {
     const change = (lv - fv) / Math.abs(fv);
     const word = (change >= 0 ? '+' : '') + (change * 100).toFixed(0) + '%';
-    if (s.better && Math.abs(change) >= 0.02) cls = (change < 0) === (s.better === 'down') ? 'good' : 'bad';
+    const cls = s.better && Math.abs(change) >= 0.02 ? ((change < 0) === (s.better === 'down') ? 'good' : 'bad') : '';
     deltaText = '<span class="' + cls + '">' + word + '</span> since ' + weeks[fi] + ' (' + s.shown[fi] + ')';
   }
-  card.innerHTML = '<h2></h2><p class="now"></p><p class="delta">' + deltaText + '</p>';
+  card.innerHTML = '<h2></h2><p class="now"></p><p class="delta">' + deltaText + '</p><svg role="img"></svg><div class="axis"><span></span><span></span></div><div class="tip"></div>';
   card.querySelector('h2').textContent = s.label;
   card.querySelector('.now').textContent = s.shown[li];
+  const [first, last] = card.querySelectorAll('.axis span');
+  first.textContent = weeks[0]; last.textContent = weeks.at(-1);
+  const svg = card.querySelector('svg'); svg.setAttribute('aria-label', s.label + ', weekly');
+  grid.appendChild(card);
+  return {s, card, svg, tip: card.querySelector('.tip'), present, li};
+});
+// Drawn at the card's real pixel width, so strokes, dots and bars keep their shape at any size.
+function draw({s, card, svg, tip, present, li}) {
+  const W = svg.getBoundingClientRect().width || 300;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.replaceChildren();
+  const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.appendChild(e); return e; };
   const max = Math.max(...present.map(([, v]) => v)); const min = s.bars ? 0 : Math.min(...present.map(([, v]) => v));
   const lo = s.bars ? 0 : min - (max - min) * 0.1; const hi = max + (max - min || Math.abs(max) || 1) * 0.1;
   const x = (i) => PAD.l + (weeks.length === 1 ? 0.5 : i / (weeks.length - 1)) * (W - PAD.l - PAD.r);
   const y = (v) => PAD.t + (1 - (v - lo) / (hi - lo || 1)) * (H - PAD.t - PAD.b);
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', s.label + ', weekly');
-  const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.appendChild(e); return e; };
-  el('line', {x1: PAD.l, x2: W - PAD.r, y1: H - PAD.b, y2: H - PAD.b, stroke: 'var(--grid)', 'stroke-width': 1});
+  el('line', {x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, stroke: 'var(--grid)', 'stroke-width': 1});
   if (s.bars) {
     const bw = Math.max(2, (W - PAD.l - PAD.r) / weeks.length - 2);
-    for (const [i, v] of present) el('rect', {x: x(i) - bw / 2, y: y(v), width: bw, height: Math.max(0, y(lo) - y(v)), rx: 2, fill: 'var(--series-1)'});
+    for (const [i, v] of present) el('rect', {x: x(i) - bw / 2, y: y(v), width: bw, height: Math.max(0, H - y(v)), rx: 2, fill: 'var(--series-1)'});
   } else {
     let d = ''; let prev = -2;
     for (const [i, v] of present) { d += (i === prev + 1 ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1) + ' '; prev = i; }
-    el('path', {d, fill: 'none', stroke: 'var(--series-1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', 'vector-effect': 'non-scaling-stroke'});
+    el('path', {d, fill: 'none', stroke: 'var(--series-1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'});
     const isolated = (i) => s.values[i - 1] == null && s.values[i + 1] == null;
-    for (const [i, v] of present) if (i === li || isolated(i)) el('circle', {cx: x(i), cy: y(v), r: 3, fill: 'var(--series-1)', stroke: 'var(--surface-2)', 'stroke-width': 2});
+    for (const [i, v] of present) if (i === li || isolated(i)) el('circle', {cx: x(i), cy: y(v), r: 3.5, fill: 'var(--series-1)', stroke: 'var(--surface-2)', 'stroke-width': 2});
   }
-  for (const i of [0, weeks.length - 1]) { const t = el('text', {x: x(i), y: H - 4, 'font-size': 10, fill: 'var(--text-muted)', 'text-anchor': i === 0 ? 'start' : 'end'}); t.textContent = weeks[i]; }
-  const cross = el('line', {y1: PAD.t, y2: H - PAD.b, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden'});
+  const cross = el('line', {y1: 0, y2: H, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden'});
   const hit = el('rect', {x: 0, y: 0, width: W, height: H, fill: 'transparent'});
-  const tip = document.createElement('div'); tip.className = 'tip';
   hit.addEventListener('pointermove', (ev) => {
-    const box = svg.getBoundingClientRect();
-    const px = (ev.clientX - box.left) / box.width * W;
+    const box = svg.getBoundingClientRect(); const px = ev.clientX - box.left;
     let best = 0; for (let i = 0; i < weeks.length; i++) if (Math.abs(x(i) - px) < Math.abs(x(best) - px)) best = i;
     cross.setAttribute('x1', x(best)); cross.setAttribute('x2', x(best)); cross.setAttribute('visibility', 'visible');
     tip.textContent = weeks[best] + ': ' + s.shown[best]; tip.style.display = 'block';
     const cardBox = card.getBoundingClientRect();
-    const left = box.left - cardBox.left + x(best) / W * box.width;
-    tip.style.left = Math.min(Math.max(0, left - 60), cardBox.width - 130) + 'px'; tip.style.top = (box.top - cardBox.top - 8) + 'px';
+    tip.style.left = Math.min(Math.max(0, box.left - cardBox.left + x(best) - 60), cardBox.width - 130) + 'px'; tip.style.top = (box.top - cardBox.top - 30) + 'px';
   });
   hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
-  card.appendChild(svg); card.appendChild(tip); grid.appendChild(card);
 }
+const drawAll = () => charts.forEach(draw);
+drawAll();
+let frame = 0;
+addEventListener('resize', () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(drawAll); });
 </script></body></html>`;
 }

@@ -12,6 +12,13 @@ stands, which parts keep needing repair, and whether a cleanup you shipped actua
 npx repo-gardener history --weeks 26 --html garden.html
 ```
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/subsy/gardener/main/docs/garden-dark.png">
+  <img alt="The garden.html page: one small chart per measure over 26 weeks, each with its latest value and the change since the first week." src="https://raw.githubusercontent.com/subsy/gardener/main/docs/garden-light.png">
+</picture>
+
+_Example data, not a real repository: a team that starts using gardener in week 28. The steps are single cleanup PRs (splitting large files, deleting tests that only restated the code, scoping the pre-push checks). The slopes are habits: a ratchet on type escapes, and a standing cleanup lane._
+
 The name comes from [Lauren Tan (poteto)](https://x.com/poteto/status/2090546476464451907):
 every team needs a gardener, someone quietly watching the stream of PRs, noticing the
 smells, and pulling the weeds (lint suppressions creeping like ivy) before slop takes over.
@@ -45,7 +52,8 @@ npx repo-gardener history --weeks 12 --html garden.html   # how it got here
 ```
 
 Open `garden.html` in a browser: one small chart per measure, a green or red change since
-the first week, and a table view.
+the first week, and a table view. It follows your system's light or dark setting; `--theme dark`
+or `--theme light` fixes it.
 
 For the rest of the picture, add the optional sources:
 
@@ -289,7 +297,7 @@ it, and have your agent run both. If you build something general, open a PR.
 | `window` | How did the last N days go? | `--days 7`, `--github`, `--transcripts` |
 | `hotspots` | Which files keep needing repair? | `--days 60`, `--limit 20` |
 | `compare <pr or commit>` | Did this change help the files it touched? | `--days 14`, `--markdown` for a PR comment |
-| `history` | How has everything moved, week by week? | `--weeks 26`, `--html <file>`, `--github`, `--transcripts` |
+| `history` | How has everything moved, week by week? | `--weeks 26`, `--html <file>`, `--theme dark`, `--github`, `--transcripts` |
 
 Every command takes `--json`, `--branch <ref>`, `--config <file>` and `--no-cache`.
 

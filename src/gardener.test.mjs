@@ -22,7 +22,7 @@ import {
   verdict,
   windowOutcomes,
 } from './outcomes.mjs';
-import { formatWindow } from './report.mjs';
+import { formatWindow, historyHtml } from './report.mjs';
 import { prOutcomes, pushOutcomes } from './sources.mjs';
 import { signature, snapshot, sqlFunctions } from './state.mjs';
 
@@ -494,6 +494,35 @@ describe('window report', () => {
     const text = formatWindow(o, prOutcomes([]), null);
     assert.ok(!text.includes('null'), text);
     assert.match(text, /Commits per PR, median \/ p90\s+Unmeasured/);
+  });
+});
+
+describe('history page', () => {
+  const row = (week, files) => ({
+    week,
+    state: {
+      lines: { source: 1000, test: 500 },
+      largeFiles: { count: files, lines: files * 900 },
+      typeEscapes: { totalSource: 1, totalTest: 2 },
+      suppressions: { total: 3 },
+      tests: { cases: 10, mockModules: 2 },
+      sql: null,
+    },
+    outcomes: { commits: 12, fixShare: 0.25, cleanupShare: 0.1, rework: { share: null }, fixRework: { share: 0.4 } },
+    prs: null,
+    pushes: null,
+  });
+
+  test('charts every measured metric, keeps close variants to the table, and leaves out unmeasured ones', () => {
+    const html = historyHtml([row('2026-W01', 5), row('2026-W02', 4)], { theme: 'dark', note: 'Example data.' });
+    const charted = JSON.parse(/const \{weeks, series\} = (\{.*\});/.exec(html)[1]).series.map((s) => s.label);
+    assert.ok(charted.includes('Source files over the size limit'));
+    assert.ok(!charted.includes('Lines in files over the size limit'));
+    assert.ok(!charted.includes('Agent push time, median'));
+    assert.match(html, /<th>Lines in files over the size limit<\/th>/);
+    assert.match(html, /<html lang="en" data-theme="dark">/);
+    assert.match(html, /Example data\./);
+    assert.match(historyHtml([row('2026-W01', 5)]), /<html lang="en">/);
   });
 });
 
