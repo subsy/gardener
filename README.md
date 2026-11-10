@@ -153,6 +153,25 @@ gardener is built to be run by agents as much as by people. The output is plain 
 reads well in a terminal, and `--json` gives agents something to parse. Some prompts that
 work well with Claude Code or Codex:
 
+**Top 10 things to work on**
+
+> I want the ten pieces of cleanup work that would most improve this codebase, ranked.
+>
+> Gather evidence first, and don't change any code:
+> 1. `npx repo-gardener snapshot`, `npx repo-gardener hotspots --days 30 --limit 30` and
+>    `npx repo-gardener history --weeks 12 --github --transcripts`.
+> 2. For the ten hottest files, read the titles of their recent fix commits
+>    (`git log --since='60 days ago' --format='%s' -- <file>`) and group them by what went wrong.
+> 3. Profile the tests: the largest spec files, the files with the most mocked modules, and
+>    the files where most assertions only check that a mock was called.
+>
+> Then rank ten pieces of work by how much repair work each would prevent. Group files that
+> break for the same reason into one item. For each give: the evidence (numbers and file
+> paths), what to do, how big it is, what could go wrong, and the exact `gardener compare` or
+> history measure that will show whether it worked. Include an item only if the evidence
+> supports it, and say what you looked for and didn't find. Don't recommend deleting a test
+> without saying what it fails to protect.
+
 **Weekly garden report**
 
 > Run `npx repo-gardener window --days 7 --github --transcripts` and
