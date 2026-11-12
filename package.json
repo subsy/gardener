@@ -1,6 +1,6 @@
 {
   "name": "repo-gardener",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Measure whether a fast-moving, agent-written codebase is getting healthier, from git history alone.",
   "type": "module",
   "bin": {
