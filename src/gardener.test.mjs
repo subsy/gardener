@@ -559,6 +559,12 @@ describe('push transcripts', () => {
       result('p2', 460, { is_error: true }),
       use('bg', 'git push', 500, { run_in_background: true }),
       result('bg', 501),
+      use('sd', 'systemd-run --user --collect bash -c "git push -u origin HEAD > log"', 520),
+      result('sd', 521),
+      use('nh', 'nohup git push origin HEAD > log 2>&1 &', 530),
+      result('nh', 531),
+      use('wt', 'systemd-run --user --wait --pipe git push origin HEAD', 540),
+      result('wt', 600),
       use('ls', 'git status', 600),
       result('ls', 601),
     ].join('\n');
@@ -594,11 +600,12 @@ describe('push transcripts', () => {
 
     const pushes = await pushOutcomes(transcripts, T0 - DAY, T0 + DAY);
     assert.deepEqual(pushes, {
-      pushes: 3,
-      byAgent: { claude: 2, codex: 1 },
+      // The detached systemd-run and nohup pushes are skipped; systemd-run --wait is a foreground push.
+      pushes: 4,
+      byAgent: { claude: 3, codex: 1 },
       medianSeconds: 120,
       p90Seconds: 300,
-      failureShare: 1 / 3,
+      failureShare: 1 / 4,
     });
     assert.equal(await pushOutcomes({ ...transcripts, match: 'nothing' }, T0 - DAY, T0 + DAY), null);
   });

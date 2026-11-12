@@ -131,6 +131,11 @@ export function originRepo(cwd) {
 
 // `git push` or `git -C <dir> push` at the start of a command; quoted mentions can still match.
 const PUSH = /(^|[\s;&|(])git\s+(?:-C\s+\S+\s+)?push\b/;
+// A push handed to a detached process (systemd-run without --wait or --pty, nohup, setsid, a
+// trailing `&`) returns at once, so the command's time says nothing about the push's.
+const DETACHED =
+  /\bsystemd-run\b(?![^;|]*\s(?:--wait|--pty|--pipe|-P|-t)\b)|\bnohup\b|\bsetsid\b|(^|[^&])&\s*$/;
+const isForegroundPush = (command) => PUSH.test(command) && !DETACHED.test(command);
 
 const expandHome = (path) => path.replace(/^~(?=\/)/, homedir());
 
@@ -240,7 +245,7 @@ export async function pushesIn(path, since, until) {
         part.type === 'tool_use' &&
         part.name === 'Bash' &&
         !part.input?.run_in_background &&
-        PUSH.test(part.input?.command ?? '')
+        isForegroundPush(part.input?.command ?? '')
       ) {
         if (at >= since && at < until) pending.set(part.id, at);
       } else if (part.type === 'tool_result' && pending.has(part.tool_use_id)) {
@@ -281,7 +286,7 @@ export async function codexPushesIn(path, match, since, until) {
     const item = entry.payload?.item;
     if (item?.type !== 'CommandExecution' || !item.duration) continue;
     const command = Array.isArray(item.command) ? item.command.at(-1) : String(item.command ?? '');
-    if (!PUSH.test(command) || !decodeURIComponent(String(item.cwd ?? '')).includes(match)) continue;
+    if (!isForegroundPush(command) || !decodeURIComponent(String(item.cwd ?? '')).includes(match)) continue;
     const seconds = item.duration.secs + item.duration.nanos / 1e9;
     const at = Date.parse(entry.timestamp) / 1000 - seconds;
     if (at < since || at >= until) continue;
