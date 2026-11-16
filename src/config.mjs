@@ -11,8 +11,14 @@ import { git } from './git.mjs';
 
 const CODE = '**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}';
 
+// A package runner and its flags (`pnpm --filter web run`); a bare `test` needs one, or the
+// shell's own `test -f x` would count as a check.
+const RUNNER = String.raw`(?:npx|bunx|pnpm|npm|yarn|bun|uv|poetry|deno)\s+(?:-{1,2}[\w-]+(?:[= ][^\s-]\S*)?\s+)*(?:(?:run|exec|dlx|x)\s+)?(?:-{1,2}[\w-]+(?:[= ][^\s-]\S*)?\s+)*`;
+const CHECK_TOOLS = String.raw`vitest|jest|mocha|playwright|cypress|tsc\b|typecheck|type-check|lint|eslint|oxlint|biome|pytest|mypy|pyright|ruff|cargo\s+(?:test|check|clippy|nextest)|go\s+(?:test|vet)|node\s+--test|make\s+(?:test|check|lint)|just\s+(?:test|check|lint)|tlc\b|apalache|lake\s+build`;
+const VERIFY_COMMANDS = String.raw`^(?:\w+=\S*\s+)*(?:${RUNNER}(?:test\b|test:|check\b|${CHECK_TOOLS})|(?:${CHECK_TOOLS}))`;
+
 // Bump when a code change alters what a cached snapshot or rework result contains.
-const SNAPSHOT_VERSION = 6;
+const SNAPSHOT_VERSION = 7;
 const REWORK_VERSION = 2;
 
 export const DEFAULTS = {
@@ -38,6 +44,7 @@ export const DEFAULTS = {
     '**/__generated__/**',
     '**/*.generated.*',
     '**/*.gen.*',
+    '**/.lake/**',
   ],
   // Measured for size, but left out of churn, hotspots and rework: files every change touches.
   churnIgnore: [
@@ -56,6 +63,43 @@ export const DEFAULTS = {
   minReworkLines: 100,
   // compare: touched files this share of all commits also change are too shared to attribute.
   sharedFileShare: 0.05,
+  // Your own weeds: name -> regex, or { pattern, in, except } to count it only in some paths.
+  // Weeds are looked for in code files only; without `in`, in source files (not tests).
+  weeds: {},
+  // Plain-text rules for agents, measured in lines: the layer that should stay thin.
+  agentInstructions: [
+    '**/AGENTS.md',
+    '**/CLAUDE.md',
+    '**/GEMINI.md',
+    '**/.cursorrules',
+    '**/.cursor/rules/**',
+    '**/.windsurfrules',
+    '**/.github/copilot-instructions.md',
+    '**/.github/instructions/**',
+    '**/.claude/skills/**/*.md',
+    '**/.claude/agents/**/*.md',
+    '**/.claude/commands/**/*.md',
+    '**/.agents/**/*.md',
+  ],
+  // Lint and dependency-rule configs, where rules turned on are counted.
+  lintConfigs: [
+    '**/eslint.config.{js,mjs,cjs,ts,mts,cts}',
+    '**/.eslintrc',
+    '**/.eslintrc.{json,js,cjs,yml,yaml}',
+    '**/.oxlintrc.json',
+    '**/biome.json',
+    '**/biome.jsonc',
+    '**/.dependency-cruiser.{js,cjs,mjs,json}',
+  ],
+  // Source files of lint rules written for this codebase.
+  lintRuleFiles: [
+    '**/eslint-rules/**/*.{js,mjs,cjs,ts,mts,cts}',
+    '**/lint-rules/**/*.{js,mjs,cjs,ts,mts,cts}',
+    '**/eslint-plugin-*/**/rules/**/*.{js,mjs,cjs,ts,mts,cts}',
+    '**/*.grit',
+  ],
+  // Formal models and proofs: TLA+, Lean, Alloy, Quint, Dafny.
+  formalSpecs: ['**/*.tla', '**/*.lean', '**/*.als', '**/*.qnt', '**/*.dfy'],
   patterns: {
     typeEscapes: {
       'as any': String.raw`\bas\s+any\b`,
@@ -75,6 +119,15 @@ export const DEFAULTS = {
     mockModules: String.raw`\b(?:vi|jest)\.mock\(`,
     callAssertions: String.raw`\.toHaveBeenCalled\w*\(`,
     assertions: String.raw`\bexpect\(`,
+    // Where a comment starts on a line: a whole-line comment, or a trailing `// …`.
+    comment: String.raw`^\s*(?:\/\/|\/\*|\*)|\s\/\/\s`,
+    // Comments that excuse or defer (matched case-insensitively, in comment text only).
+    workaroundComments: String.raw`\b(?:workaround|work around|hack(?:y|ish)?|for now|temporar(?:y|ily)|quick fix|band-?aid|intentional(?:ly)?|deliberately|on purpose|TODO|FIXME|XXX)\b`,
+    // A rule turned on in a lint config: `"no-console": "error"`, `'x/y': ['warn', …]`.
+    enabledRule: String.raw`["']?[@\w/.-]+["']?\s*:\s*\[?\s*["']?(?:error|warn|deny|[12])["']?(?![\w-])`,
+    // Test files that generate inputs (property-based) or drive the running app (end to end).
+    propertyTests: String.raw`from\s+["']fast-check["']|require\(["']fast-check["']\)|\bfc\.(?:assert|property|asyncProperty)\(|@given\(|\bproptest!|\bquickcheck\b|@antithesishq\/bombadil`,
+    e2eTests: String.raw`from\s+["']@playwright\/test["']|\bcy\.visit\(|\bbrowser\.url\(|from\s+["']@wdio\/`,
   },
   sql: null,
   // match null: the repository's directory name, which both agents record in their paths.
@@ -82,6 +135,10 @@ export const DEFAULTS = {
     claudeProjectsDir: '~/.claude/projects',
     codexSessionsDir: '~/.codex/sessions',
     match: null,
+    // A shell command that checks the work: tests, type checks, lint, model checkers.
+    verifyCommands: VERIFY_COMMANDS,
+    // An agent tool that looks at the running app: a browser, DevTools, a screenshot.
+    verifyTools: String.raw`playwright|chrome|devtools|browser|screenshot|preview_(?:snapshot|evaluate|act)`,
   },
 };
 
@@ -120,9 +177,24 @@ const repoName = (root) => {
 export function resolveConfig(user) {
   const merged = { ...DEFAULTS, ...user };
   merged.patterns = { ...DEFAULTS.patterns, ...user.patterns };
-  merged.tests = [...DEFAULTS.tests, ...(user.tests ?? [])];
-  merged.ignore = [...DEFAULTS.ignore, ...(user.ignore ?? [])];
-  merged.churnIgnore = [...DEFAULTS.churnIgnore, ...(user.churnIgnore ?? [])];
+  for (const key of [
+    'tests',
+    'ignore',
+    'churnIgnore',
+    'agentInstructions',
+    'lintConfigs',
+    'lintRuleFiles',
+    'formalSpecs',
+  ])
+    merged[key] = [...DEFAULTS[key], ...(user[key] ?? [])];
+  merged.weeds = Object.fromEntries(
+    Object.entries(user.weeds ?? {}).map(([name, weed]) => {
+      const resolved = typeof weed === 'string' ? { pattern: weed } : weed;
+      if (typeof resolved?.pattern !== 'string' || resolved.pattern === '')
+        throw new Error(`weed "${name}" needs a pattern`);
+      return [name, resolved];
+    }),
+  );
   merged.transcripts = { ...DEFAULTS.transcripts, ...user.transcripts };
   // Each cache keys on only the settings that change its results, so tuning a window or a
   // sample size keeps every cached commit.
@@ -135,6 +207,11 @@ export function resolveConfig(user) {
       merged.patterns,
       merged.sql,
       merged.largeFileLines,
+      merged.weeds,
+      merged.agentInstructions,
+      merged.lintConfigs,
+      merged.lintRuleFiles,
+      merged.formalSpecs,
     ]),
     rework: digest([
       REWORK_VERSION,
@@ -148,7 +225,8 @@ export function resolveConfig(user) {
   return merged;
 }
 
-const anyGlob = (globs) => (path) =>
+/** A path test that passes when any of `globs` matches. */
+export const anyGlob = (globs) => (path) =>
   globs.some((glob) => matchesGlob(path, glob));
 
 /** Path classifiers derived from a resolved config. */
@@ -157,6 +235,11 @@ export function classifiers(config) {
   const churnIgnored = anyGlob(config.churnIgnore);
   const code = anyGlob(config.code);
   const test = anyGlob(config.tests);
+  // The glob test first: most paths fail it, so the longer ignore list rarely runs.
+  const kept = (globs) => {
+    const matches = anyGlob(globs);
+    return (path) => matches(path) && !ignored(path);
+  };
   // Schemas carry SQL change; migrations are write-once copies of it and would double-count.
   const schemaFiles = config.sql
     ? anyGlob(config.sql.schemas ?? [])
@@ -165,6 +248,10 @@ export function classifiers(config) {
     ignored,
     isCode: (path) => !ignored(path) && code(path),
     isTest: (path) => test(path),
+    isAgentInstructions: kept(config.agentInstructions),
+    isLintConfig: kept(config.lintConfigs),
+    isLintRule: kept(config.lintRuleFiles),
+    isFormalSpec: kept(config.formalSpecs),
     /** Files whose churn says something about health: not ignored, generated or fan-out noise. */
     isChurn: (path) =>
       !ignored(path) &&

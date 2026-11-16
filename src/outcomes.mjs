@@ -1,6 +1,6 @@
 /**
  * ABOUTME: Outcome metrics over a time window of first-parent history: commit mix, net
- * lines, rework (lines rewritten within N days of being written), hotspots, and the
+ * lines, reverts, rework (lines rewritten within N days of being written), hotspots, and the
  * before/after comparison for one intervention commit.
  */
 import { availableParallelism } from 'node:os';
@@ -10,6 +10,7 @@ import {
   blameRecent,
   commitTime,
   DAY,
+  firstParentSubjects,
   refUpdatedAt,
   lineCount,
   listBlobs,
@@ -17,6 +18,7 @@ import {
   readBlobs,
   rewrittenRanges,
 } from './git.mjs';
+import { quantile } from './sources.mjs';
 
 const TYPES = new Set([
   'feat',
@@ -51,12 +53,49 @@ const VERBS = [
  * anything else is 'other'.
  */
 export function commitType(subject) {
+  if (revertedSubject(subject) !== null) return 'revert';
   const match = /^(\w+)(?:\([^)]*\))?!?:/.exec(subject);
   const type = match?.[1].toLowerCase();
   if (type && TYPES.has(type)) return type;
   if (match) return 'other';
   const plain = subject.replace(/^(\[[^\]]*\]\s*)+/, '');
   return VERBS.find(([re]) => re.test(plain))?.[1] ?? 'other';
+}
+
+// git's own revert title, `Revert "<subject>"`, with a squash merge's ` (#123)` after it.
+const GIT_REVERT = /^Revert "(.*)"(?:\s+\(#\d+\))?$/;
+
+/**
+ * Title of the commit a revert undid, from git's `Revert "…"` or a `revert: …` prefix;
+ * null when `subject` isn't a revert.
+ */
+export function revertedSubject(subject) {
+  const git = GIT_REVERT.exec(subject);
+  if (git) return git[1];
+  const conventional = /^revert(?:\([^)]*\))?!?:\s*(.*)$/i.exec(subject);
+  return conventional ? conventional[1] : null;
+}
+
+/**
+ * Reverts among `commits`: how many, and the median hours from each reverted commit to its
+ * revert, for reverts whose original is found on the branch by its title.
+ */
+export function revertTimes(cwd, branch, commits) {
+  const reverts = commits.filter((c) => commitType(c.subject) === 'revert');
+  const bySubject = reverts.length ? firstParentSubjects(cwd, branch) : null;
+  const hours = [];
+  for (const revert of reverts) {
+    // Newest first, so the first one older than the revert is the commit it undid.
+    const original = bySubject
+      .get(revertedSubject(revert.subject))
+      ?.find((c) => c.time < revert.time);
+    if (original) hours.push((revert.time - original.time) / 3600);
+  }
+  return {
+    count: reverts.length,
+    matched: hours.length,
+    medianHours: quantile(hours, 0.5),
+  };
 }
 
 /** Every k-th item so that at most `limit` remain, spread evenly across the list. */
@@ -158,7 +197,8 @@ export async function windowOutcomes(cwd, config, since, until, cache) {
     deleted += d;
     if (d > a) {
       netDeleting += 1;
-      if (type !== 'refactor') otherDeleting += 1;
+      // Undoing a change isn't weeding, though it usually deletes more than it adds.
+      if (type !== 'refactor' && type !== 'revert') otherDeleting += 1;
     }
   }
   const sampleSize = config.reworkSample;
@@ -179,6 +219,8 @@ export async function windowOutcomes(cwd, config, since, until, cache) {
     byType,
     fixShare: shareOf(byType.fix ?? 0),
     cleanupShare: shareOf((byType.refactor ?? 0) + otherDeleting),
+    revertShare: shareOf(byType.revert ?? 0),
+    reverts: revertTimes(cwd, config.branch, commits),
     lines: { added, deleted, net: added - deleted },
     netDeletingShare: shareOf(netDeleting),
     rework: floor(allRework),

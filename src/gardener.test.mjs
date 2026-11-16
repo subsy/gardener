@@ -22,9 +22,9 @@ import {
   verdict,
   windowOutcomes,
 } from './outcomes.mjs';
-import { formatWindow, historyHtml } from './report.mjs';
-import { prOutcomes, pushOutcomes } from './sources.mjs';
-import { signature, snapshot, sqlFunctions } from './state.mjs';
+import { formatCompare, formatWindow, historyHtml } from './report.mjs';
+import { agentOutcomes, humanReviewed, prOutcomes, verifyClassifier } from './sources.mjs';
+import { commentLines, signature, snapshot, sqlFunctions } from './state.mjs';
 
 const T0 = Date.UTC(2026, 0, 5) / 1000;
 const roots = [];
@@ -107,6 +107,96 @@ describe('snapshot', () => {
       assertions: 1,
     });
     assert.equal(s.sql, null);
+  });
+
+  test('counts your own weeds only where they are banned', () => {
+    const r = repo();
+    r.write('src/app/panel.tsx', 'useEffect(() => {});\nuseEffect(() => {});\nsetTimeout(f, 0);\n');
+    r.write('src/framework/hooks.ts', 'useEffect(() => {});\n');
+    r.write('src/app/panel.test.tsx', 'useEffect(() => {});\nsetTimeout(f, 0);\n');
+    r.write('electron/renderer/view.ts', "import { db } from '../main/db';\n");
+    r.write('electron/main/boot.ts', "import { db } from '../main/db';\n");
+    const s = snapshot(
+      r.root,
+      r.commit('feat: start', T0),
+      config({
+        weeds: {
+          useEffect: { pattern: String.raw`\buseEffect\(`, except: ['src/framework/**'] },
+          timers: String.raw`\bsetTimeout\(`,
+          'renderer imports main': {
+            pattern: String.raw`from ['"][^'"]*\/main\/`,
+            in: ['electron/renderer/**'],
+          },
+        },
+      }),
+    );
+    // Tests are left out unless a weed's `in` names them.
+    assert.deepEqual(s.weeds.useEffect, {
+      count: 2,
+      top: [{ path: 'src/app/panel.tsx', count: 2 }],
+    });
+    assert.equal(s.weeds.timers.count, 1);
+    assert.equal(s.weeds['renderer imports main'].count, 1);
+  });
+
+  test('counts comments, workaround comments, agent instructions, lint rules and kinds of tests', () => {
+    const r = repo();
+    r.write(
+      'src/a.ts',
+      [
+        '/**',
+        ' * Loads the thing.',
+        ' */',
+        'const hack = 1; // a quick fix for now',
+        '// setTimeout here deliberately, to dodge the race',
+        'const url = "http://x";',
+        'const n = a * b;',
+        '',
+      ].join('\n'),
+    );
+    r.write('src/a.test.ts', '// TODO: hack\nimport fc from "fast-check";\n');
+    r.write('e2e/login.spec.ts', "import { test } from '@playwright/test';\n");
+    r.write('specs/Notify.tla', '---- MODULE Notify ----\n');
+    r.write('AGENTS.md', 'one\ntwo\nthree\n');
+    r.write('web/.claude/skills/run/SKILL.md', 'one\ntwo\n');
+    r.write('docs/guide.md', 'not for agents\n');
+    r.write(
+      'eslint.config.mjs',
+      "export default [{ rules: { 'no-console': 'error', 'react-hooks/exhaustive-deps': ['warn', {}], eqeqeq: 'off' } }];\n",
+    );
+    r.write('.oxlintrc.json', '{ "rules": { "no-debugger": "deny", "no-alert": "allow" } }\n');
+    r.write('legacy/.eslintrc.json', '{ "ecmaVersion": 2022, "rules": { "eqeqeq": 2, "indent": [1, 2], "no-var": 0 } }\n');
+    r.write('tools/eslint-rules/no-timers.mjs', 'export default {};\n');
+    const s = snapshot(r.root, r.commit('feat: start', T0), config());
+
+    // Comments are counted in source only; the test file's TODO isn't.
+    assert.equal(s.comments.lines, 5);
+    assert.equal(s.comments.workarounds, 2);
+    assert.deepEqual(s.comments.topWorkarounds, [{ path: 'src/a.ts', count: 2 }]);
+    assert.deepEqual(s.agentInstructions, { files: 2, lines: 5 });
+    assert.deepEqual(s.lint, { rulesOn: 5, customRuleFiles: 1 });
+    assert.deepEqual(s.verification, {
+      propertyTestFiles: 1,
+      e2eTestFiles: 1,
+      formalSpecs: 1,
+    });
+  });
+
+  test('a weed that can match nothing is counted without hanging, and one with no pattern is refused', () => {
+    const r = repo();
+    r.write('src/a.ts', 'aaa b aa\n');
+    const s = snapshot(r.root, r.commit('feat: a', T0), config({ weeds: { as: 'a*' } }));
+    assert.ok(s.weeds.as.count >= 2);
+    assert.throws(() => resolveConfig({ weeds: { broken: { in: ['src/**'] } } }), /needs a pattern/);
+  });
+
+  test('commentLines searches only the comment for excuses', () => {
+    const comment = /^\s*(?:\/\/|\/\*|\*)|\s\/\/\s/;
+    const workaround = /\b(?:workaround|hack)\b/i;
+    assert.deepEqual(
+      commentLines('const hack = 1;\nconst x = 1; // Workaround\n', comment, workaround),
+      { lines: 1, workarounds: 1 },
+    );
   });
 
   test('measures each SQL function at its latest migration definition, honouring drops', () => {
@@ -226,6 +316,28 @@ describe('outcomes', () => {
     assert.equal(commitType('Simplify blog index copy'), 'refactor');
     assert.equal(commitType('Add trial team health to admin'), 'feat');
     assert.equal(commitType('Reduce Sentry noise'), 'other');
+    assert.equal(commitType('Revert "feat: add x"'), 'revert');
+    assert.equal(commitType('Revert "Fix y (#12)" (#40)'), 'revert');
+    assert.equal(commitType('revert: feat: add x'), 'revert');
+    assert.equal(commitType('Revert the cache change'), 'other');
+  });
+
+  test('reverts are counted, timed from the commit they undo, and never count as cleanup', async () => {
+    const r = repo();
+    r.write('src/a.ts', lines(10));
+    r.commit('feat: base', T0);
+    r.write('src/a.ts', lines(40));
+    r.commit('feat: grow a (#7)', T0 + DAY);
+    r.write('src/a.ts', lines(10));
+    r.commit('Revert "feat: grow a (#7)" (#8)', T0 + DAY + 6 * 3600);
+    r.write('src/b.ts', lines(5));
+    r.commit('Revert "feat: never on this branch"', T0 + 2 * DAY);
+
+    const o = await windowOutcomes(r.root, config(), T0 + DAY / 2, T0 + 3 * DAY);
+    assert.equal(o.byType.revert, 2);
+    assert.equal(o.revertShare, 2 / 3);
+    assert.deepEqual(o.reverts, { count: 2, matched: 1, medianHours: 6 });
+    assert.equal(o.cleanupShare, 0);
   });
 
   test('rework counts rewritten lines younger than the limit, and never whole-file deletes', async () => {
@@ -475,6 +587,28 @@ describe('review load', () => {
     ]);
     assert.deepEqual(out.commitsAfterReview, { median: 2, p90: 2 });
   });
+
+  test('a PR counts as human-reviewed only when someone other than its author and bots reviewed it', () => {
+    const pr = (author, reviewers, totalCount = reviewers.length) => ({
+      author: { login: author },
+      commits: { totalCount: 1, nodes: [] },
+      reviews: {
+        totalCount,
+        nodes: reviewers.map(([login, type = 'User']) => ({
+          submittedAt: '2026-01-02',
+          author: { login, __typename: type },
+        })),
+      },
+      reviewThreads: { totalCount: 0 },
+    });
+    assert.equal(humanReviewed(pr('ana', [])), false);
+    assert.equal(humanReviewed(pr('ana', [['ana'], ['coderabbitai', 'Bot'], ['old-ci[bot]']])), false);
+    assert.equal(humanReviewed(pr('ana', [['coderabbitai', 'Bot'], ['ben']])), true);
+    assert.equal(humanReviewed(pr('ana', [['coderabbitai', 'Bot']], 80)), true);
+    const out = prOutcomes([pr('ana', []), pr('ana', [['ben']]), pr('ana', [['ana']]), pr('ana', [['ben']])]);
+    assert.equal(out.unreviewedShare, 0.5);
+    assert.equal(prOutcomes([]).unreviewedShare, null);
+  });
 });
 
 describe('window report', () => {
@@ -497,6 +631,25 @@ describe('window report', () => {
   });
 });
 
+describe('compare report', () => {
+  test('lists a change in your weeds alongside the built-in measures', async () => {
+    const r = repo();
+    r.write('src/a.tsx', 'useEffect(() => {});\nuseEffect(() => {});\n');
+    const parent = r.commit('feat: a', T0);
+    r.write('src/a.tsx', 'useEffect(() => {});\n');
+    const sha = r.commit('refactor: drop an effect', T0 + DAY);
+    const c = config({ weeds: { useEffect: String.raw`\buseEffect\(` } });
+    const text = formatCompare({
+      sha,
+      touched: 1,
+      before: snapshot(r.root, parent, c),
+      after: snapshot(r.root, sha, c),
+      windows: await compareWindows(r.root, c, { sha, time: T0 + DAY }, new Set(['src/a.tsx']), 7, T0 + 2 * DAY),
+    });
+    assert.match(text, /Weed: useEffect\s+2\s+1\s+-1/);
+  });
+});
+
 describe('history page', () => {
   const row = (week, files) => ({
     week,
@@ -505,6 +658,9 @@ describe('history page', () => {
       largeFiles: { count: files, lines: files * 900 },
       typeEscapes: { totalSource: 1, totalTest: 2 },
       suppressions: { total: 3 },
+      weeds: { useEffect: { count: files * 2, top: [] } },
+      comments: { lines: 50, workarounds: 4, topWorkarounds: [] },
+      verification: { propertyTestFiles: 0, e2eTestFiles: 3, formalSpecs: 0 },
       tests: { cases: 10, mockModules: 2 },
       sql: null,
     },
@@ -517,6 +673,11 @@ describe('history page', () => {
     const html = historyHtml([row('2026-W01', 5), row('2026-W02', 4)], { theme: 'dark', note: 'Example data.' });
     const charted = JSON.parse(/const \{weeks, series\} = (\{.*\});/.exec(html)[1]).series.map((s) => s.label);
     assert.ok(charted.includes('Source files over the size limit'));
+    assert.equal(charted[charted.indexOf('Lint suppressions') + 1], 'Weed: useEffect');
+    assert.ok(charted.includes('Comment lines per 1,000 source lines'));
+    assert.ok(charted.includes('End-to-end test files'));
+    // A codebase with no formal specs gets no flat-zero chart for them.
+    assert.ok(!charted.includes('Formal spec files'));
     assert.ok(!charted.includes('Lines in files over the size limit'));
     assert.ok(!charted.includes('Agent push time, median'));
     assert.match(html, /<th>Lines in files over the size limit<\/th>/);
@@ -572,6 +733,11 @@ describe('push transcripts', () => {
     mkdirSync(join(root, '-home-me-otherrepo'));
     writeFileSync(join(root, '-home-me-myrepo', 'one.jsonl'), session);
     writeFileSync(join(root, '-home-me-myrepo', 'resumed.jsonl'), session);
+    // A copy whose entries lost their timestamps must not replace the timed originals.
+    writeFileSync(
+      join(root, '-home-me-myrepo', 'stripped.jsonl'),
+      session.replace(/"timestamp":"[^"]*",/g, ''),
+    );
     writeFileSync(
       join(root, '-home-me-otherrepo', 'x.jsonl'),
       session.replaceAll('p1', 'q1'),
@@ -598,7 +764,7 @@ describe('push transcripts', () => {
     );
     const transcripts = { claudeProjectsDir: root, codexSessionsDir: join(root, 'codex'), match: 'myrepo' };
 
-    const pushes = await pushOutcomes(transcripts, T0 - DAY, T0 + DAY);
+    const { pushes } = await agentOutcomes(transcripts, T0 - DAY, T0 + DAY);
     assert.deepEqual(pushes, {
       // The detached systemd-run and nohup pushes are skipped; systemd-run --wait is a foreground push.
       pushes: 4,
@@ -607,6 +773,86 @@ describe('push transcripts', () => {
       p90Seconds: 300,
       failureShare: 1 / 4,
     });
-    assert.equal(await pushOutcomes({ ...transcripts, match: 'nothing' }, T0 - DAY, T0 + DAY), null);
+    assert.deepEqual(await agentOutcomes({ ...transcripts, match: 'nothing' }, T0 - DAY, T0 + DAY), {
+      pushes: null,
+      verification: null,
+    });
+  });
+
+  test('commands that run checks are told apart from ones that only mention them', () => {
+    const is = verifyClassifier(resolveConfig({}).transcripts);
+    const checks = [
+      'npm test',
+      'pnpm --filter web test',
+      'pnpm -F x run test:unit',
+      'cd web && npx vitest run',
+      'CI=1 pnpm lint',
+      'npx tsc --noEmit',
+      'cargo test',
+      'node --test src/*.test.mjs',
+      'make check',
+    ];
+    const others = [
+      'test -f x && pnpm build',
+      'git commit -m "add test"',
+      'echo test',
+      'npm run build',
+      'nohup pnpm test > log 2>&1 &',
+    ];
+    for (const c of checks) assert.ok(is.verifies(c), c);
+    for (const c of others) assert.ok(!is.verifies(c), c);
+  });
+
+  test('verification share counts checks among the commands and tools agents ran', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gardener-verify-'));
+    roots.push(root);
+    const at = (s) => new Date((T0 + s) * 1000).toISOString();
+    const use = (id, name, input, s) =>
+      JSON.stringify({ timestamp: at(s), message: { content: [{ type: 'tool_use', id, name, input }] } });
+    const result = (id, s) =>
+      JSON.stringify({ timestamp: at(s), message: { content: [{ type: 'tool_result', tool_use_id: id }] } });
+    mkdirSync(join(root, '-home-me-myrepo'));
+    writeFileSync(
+      join(root, '-home-me-myrepo', 's.jsonl'),
+      [
+        use('t1', 'Bash', { command: 'cd web && pnpm --filter app test' }, 0),
+        result('t1', 60),
+        use('t2', 'Bash', { command: 'git commit -m "add test"' }, 60),
+        result('t2', 62),
+        use('t3', 'mcp__browser__take_screenshot', {}, 62),
+        result('t3', 82),
+        use('t4', 'Edit', { file_path: 'a.ts' }, 82),
+        result('t4', 83),
+        use('t5', 'Bash', { command: 'pnpm install' }, 83),
+        result('t5', 141),
+      ].join('\n'),
+    );
+    const codex = join(root, 'codex');
+    mkdirSync(join(codex, '2026'), { recursive: true });
+    const done = (item, endS) =>
+      JSON.stringify({ timestamp: at(endS), type: 'event_msg', payload: { type: 'item_completed', item } });
+    writeFileSync(
+      join(codex, '2026', 'rollout.jsonl'),
+      [
+        JSON.stringify({ timestamp: at(0), type: 'session_meta', payload: { cwd: '/home/me/myrepo' } }),
+        done({ type: 'CommandExecution', id: 'c1', command: ['zsh', '-lc', 'npx tsc --noEmit'], cwd: '/home/me/myrepo', exit_code: 0, duration: { secs: 30, nanos: 0 } }, 200),
+        done({ type: 'McpToolCall', id: 'c2', server: 'docs', tool: 'search', status: 'completed', duration: { secs: 10, nanos: 0 } }, 210),
+      ].join('\n'),
+    );
+    const transcripts = {
+      ...resolveConfig({}).transcripts,
+      claudeProjectsDir: root,
+      codexSessionsDir: codex,
+      match: 'myrepo',
+    };
+    const { verification } = await agentOutcomes(transcripts, T0 - DAY, T0 + DAY);
+    // Timed: four Claude commands and tools (not the Edit), and two Codex calls.
+    // Checks: the test run, the screenshot and tsc.
+    assert.deepEqual(verification, {
+      calls: 6,
+      checks: 3,
+      callShare: 0.5,
+      timeShare: 110 / 180,
+    });
   });
 });

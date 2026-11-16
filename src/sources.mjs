@@ -1,7 +1,8 @@
 /**
  * ABOUTME: Optional outcome sources outside git: merged-PR review load from GitHub (via the
- * gh CLI) and push durations from Claude Code transcripts. Each returns null when its source
- * is missing, so a gap reads as unmeasured rather than zero.
+ * gh CLI), and from Claude Code and Codex transcripts, push durations and how much command
+ * time went to checking the work. Each returns null when its source is missing, so a gap
+ * reads as unmeasured rather than zero.
  */
 import { execFileSync } from 'node:child_process';
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
@@ -17,8 +18,9 @@ const PR_QUERY = `query($q: String!, $after: String) {
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
       number createdAt mergedAt
+      author { login }
       commits(last: 40) { totalCount nodes { commit { committedDate } } }
-      reviews(first: 1) { totalCount nodes { submittedAt } }
+      reviews(first: 50) { totalCount nodes { submittedAt author { __typename login } } }
       reviewThreads { totalCount }
     } }
   }
@@ -84,9 +86,24 @@ function searchMergedPrs(repo, since, until) {
   return prs;
 }
 
+// Review bots: GitHub Apps report as Bot; some older integrations are users named `…[bot]`.
+const isBot = (author) =>
+  author?.__typename === 'Bot' || /\[bot\]$/.test(author?.login ?? '');
+
+/**
+ * Whether anyone other than the PR's author and bots left a review. A PR with more reviews
+ * than were fetched counts as reviewed.
+ */
+export function humanReviewed(pr) {
+  if (pr.reviews.totalCount > pr.reviews.nodes.length) return true;
+  return pr.reviews.nodes.some(
+    (r) => r.author && !isBot(r.author) && r.author.login !== pr.author?.login,
+  );
+}
+
 /**
  * Review load per merged PR: commits, commits pushed after the first review (fix rounds),
- * and review threads opened. Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
+ * review threads opened, and the share merged without a human review. Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
  * them follows the first review the true count is unknown, so that PR is left out of the
  * after-review figures rather than undercounted.
  */
@@ -104,6 +121,9 @@ export function prOutcomes(prs) {
   const threads = prs.map((p) => p.reviewThreads.totalCount);
   return {
     prs: prs.length,
+    unreviewedShare: prs.length
+      ? prs.filter((p) => !humanReviewed(p)).length / prs.length
+      : null,
     commitsPerPr: {
       median: quantile(commits, 0.5),
       p90: quantile(commits, 0.9),
@@ -137,6 +157,25 @@ const DETACHED =
   /\bsystemd-run\b(?![^;|]*\s(?:--wait|--pty|--pipe|-P|-t)\b)|\bnohup\b|\bsetsid\b|(^|[^&])&\s*$/;
 const isForegroundPush = (command) => PUSH.test(command) && !DETACHED.test(command);
 
+/**
+ * Classifies agent commands and tools: `verifies(command)` for a shell command that runs a
+ * check in any step of a `&&` chain (a detached one returns at once, so its check didn't
+ * run), `verifyingTool(name)` for a tool that looks at the running app.
+ */
+export function verifyClassifier(transcripts) {
+  const command = new RegExp(transcripts.verifyCommands);
+  const tool = new RegExp(transcripts.verifyTools, 'i');
+  return {
+    verifies: (text) =>
+      !DETACHED.test(text) &&
+      text
+        .split(/&&|\|\||;|\n/)
+        .map((step) => step.trim().replace(/^(?:cd\s+\S+|timeout\s+\S+)\s*/, '').trim())
+        .some((step) => command.test(step)),
+    verifyingTool: (name) => tool.test(name),
+  };
+}
+
 const expandHome = (path) => path.replace(/^~(?=\/)/, homedir());
 
 /** `.jsonl` files under `root` (recursively) modified at or after `since`; [] if absent. */
@@ -167,27 +206,29 @@ function transcriptFiles(root, since, keepDir = () => true) {
 }
 
 /**
- * Foreground pushes run by coding agents that started in [since, until): when each started,
- * how long it took and whether it failed, from Claude Code transcripts (project dirs whose
- * name contains `match`) and Codex sessions (commands whose working directory contains
- * `match`). Resumed and forked sessions repeat history, so pushes dedupe by call id. Null
- * when neither agent left any transcript in the window.
+ * Timed commands and tool calls that coding agents started in [since, until): shell
+ * commands and MCP tools, each { id, agent, at, seconds, failed, push, verify }. Claude Code
+ * transcripts are read from project dirs whose name contains `match`, Codex sessions when the
+ * command (or, for MCP tools, the session) ran in a directory containing `match`. Resumed
+ * and forked sessions repeat history, so calls dedupe by id. Null when neither agent left
+ * any transcript in the window.
  */
-export async function collectPushes(transcripts, since, until) {
+export async function collectAgentCalls(transcripts, since, until) {
   if (!transcripts.match) return null;
+  const is = verifyClassifier(transcripts);
   const sources = [
     ...transcriptFiles(expandHome(transcripts.claudeProjectsDir), since, (dir) => dir.includes(transcripts.match)).map(
-      (path) => () => pushesIn(path, since, until),
+      (path) => () => claudeCallsIn(path, is, since, until),
     ),
     ...transcriptFiles(expandHome(transcripts.codexSessionsDir), since).map(
-      (path) => () => codexPushesIn(path, transcripts.match, since, until),
+      (path) => () => codexCallsIn(path, transcripts.match, is, since, until),
     ),
   ];
   if (sources.length === 0) return null;
   const byId = new Map();
   for (const read of sources) {
     try {
-      for (const push of await read()) byId.set(push.id, push);
+      for (const call of await read()) byId.set(call.id, call);
     } catch (error) {
       // Live sessions move and clean up transcripts while we read them.
       if (error.code !== 'ENOENT') throw error;
@@ -196,40 +237,82 @@ export async function collectPushes(transcripts, since, until) {
   return [...byId.values()];
 }
 
+const inWindow = (calls, since, until) =>
+  (calls ?? []).filter((c) => c.at >= since && c.at < until);
+
 /** Push count, median and p90 seconds, and failure share for pushes started in [since, until). */
-export function summarisePushes(pushes, since, until) {
-  const inWindow = (pushes ?? []).filter((p) => p.at >= since && p.at < until);
-  if (inWindow.length === 0) return null;
-  const durations = inWindow.map((p) => p.seconds);
+export function summarisePushes(calls, since, until) {
+  const pushes = inWindow(calls, since, until).filter((c) => c.push);
+  if (pushes.length === 0) return null;
+  const durations = pushes.map((p) => p.seconds);
   return {
-    pushes: inWindow.length,
-    byAgent: Object.fromEntries(['claude', 'codex'].map((agent) => [agent, inWindow.filter((p) => p.agent === agent).length])),
+    pushes: pushes.length,
+    byAgent: Object.fromEntries(['claude', 'codex'].map((agent) => [agent, pushes.filter((p) => p.agent === agent).length])),
     medianSeconds: quantile(durations, 0.5),
     p90Seconds: quantile(durations, 0.9),
-    failureShare: inWindow.filter((p) => p.failed).length / inWindow.length,
+    failureShare: pushes.filter((p) => p.failed).length / pushes.length,
   };
 }
 
-/** Push summary for one window; see collectPushes. */
-export async function pushOutcomes(transcripts, since, until) {
-  return summarisePushes(
-    await collectPushes(transcripts, since, until),
-    since,
-    until,
-  );
+/**
+ * How much of the agents' command and tool work in [since, until) checked the work: the
+ * share of calls, and of the time spent in them, that ran tests, type checks, lint or a look
+ * at the running app.
+ */
+export function summariseVerification(calls, since, until) {
+  const all = inWindow(calls, since, until);
+  if (all.length === 0) return null;
+  const checks = all.filter((c) => c.verify);
+  const seconds = all.reduce((sum, c) => sum + c.seconds, 0);
+  const checkSeconds = checks.reduce((sum, c) => sum + c.seconds, 0);
+  return {
+    calls: all.length,
+    checks: checks.length,
+    callShare: checks.length / all.length,
+    timeShare: seconds > 0 ? checkSeconds / seconds : null,
+  };
 }
 
-/** Foreground pushes in one Claude Code transcript: [{ id, agent, at, seconds, failed }]. */
-export async function pushesIn(path, since, until) {
+/** Agent push time and verification share for one window; see collectAgentCalls. */
+export async function agentOutcomes(transcripts, since, until) {
+  const calls = await collectAgentCalls(transcripts, since, until);
+  return {
+    pushes: summarisePushes(calls, since, until),
+    verification: summariseVerification(calls, since, until),
+  };
+}
+
+// Claude Code tools that run something: the shell, and any MCP server's tools.
+const isTimedTool = (name) => name === 'Bash' || name?.startsWith('mcp__');
+
+const RESULT_ID = '"tool_use_id":"';
+
+/** Whether `line` carries the result of any call in `pending`, found without parsing it. */
+function resultsPending(line, pending) {
+  for (let at = line.indexOf(RESULT_ID); at >= 0; at = line.indexOf(RESULT_ID, at + 1)) {
+    const start = at + RESULT_ID.length;
+    if (pending.has(line.slice(start, line.indexOf('"', start)))) return true;
+  }
+  return false;
+}
+
+/** Timed calls in one Claude Code transcript; see collectAgentCalls. */
+export async function claudeCallsIn(path, is, since, until) {
   const pending = new Map();
-  const pushes = [];
+  const calls = [];
   const lines = createInterface({
     input: createReadStream(path),
     crlfDelay: Infinity,
   });
   for await (const line of lines) {
-    const mayStart = line.includes('"tool_use"') && line.includes('push');
-    const mayEnd = pending.size > 0 && line.includes('"tool_result"');
+    // Most lines are reads, edits and their results, often large: skip them unparsed.
+    const mayStart =
+      line.includes('"tool_use"') &&
+      (line.includes('"name":"Bash"') || line.includes('"name":"mcp__'));
+    const mayEnd =
+      pending.size > 0 &&
+      line.includes('"tool_result"') &&
+      resultsPending(line, pending);
     if (!mayStart && !mayEnd) continue;
     let entry;
     try {
@@ -241,56 +324,91 @@ export async function pushesIn(path, since, until) {
     for (const part of Array.isArray(entry.message?.content)
       ? entry.message.content
       : []) {
-      if (
-        part.type === 'tool_use' &&
-        part.name === 'Bash' &&
-        !part.input?.run_in_background &&
-        isForegroundPush(part.input?.command ?? '')
-      ) {
-        if (at >= since && at < until) pending.set(part.id, at);
+      if (part.type === 'tool_use' && isTimedTool(part.name)) {
+        // Written so an entry without a timestamp (NaN) is left out, not let in.
+        if (!(at >= since && at < until) || part.input?.run_in_background) continue;
+        const command = part.name === 'Bash' ? (part.input?.command ?? '') : null;
+        pending.set(part.id, {
+          at,
+          push: command !== null && isForegroundPush(command),
+          verify: command === null ? is.verifyingTool(part.name) : is.verifies(command),
+        });
       } else if (part.type === 'tool_result' && pending.has(part.tool_use_id)) {
-        // A long command the harness moved to the background returns early; its time is not the push's.
+        // A long command the harness moved to the background returns early; its time is not the command's.
         if (!entry.toolUseResult?.backgroundTaskId) {
           const start = pending.get(part.tool_use_id);
-          pushes.push({
+          calls.push({
             id: part.tool_use_id,
             agent: 'claude',
-            at: start,
-            seconds: at - start,
+            at: start.at,
+            seconds: at - start.at,
             failed: part.is_error === true,
+            push: start.push,
+            verify: start.verify,
           });
         }
         pending.delete(part.tool_use_id);
       }
     }
   }
-  return pushes;
+  return calls;
 }
 
 /**
- * Pushes in one Codex session: completed command executions run under a working directory
- * containing `match`. Codex records each command's exit code and run time, so the start is
- * the completion time less the duration.
+ * Timed calls in one Codex session: completed command executions run under a working
+ * directory containing `match`, and MCP tool calls in a session that started in one. Codex
+ * records each call's run time, so the start is the completion time less the duration.
  */
-export async function codexPushesIn(path, match, since, until) {
-  const pushes = [];
+export async function codexCallsIn(path, match, is, since, until) {
+  const calls = [];
+  const tools = [];
+  let sessionMatches = false;
   const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
   for await (const line of lines) {
-    if (!line.includes('CommandExecution') || !line.includes('push')) continue;
+    const meta = line.includes('"session_meta"');
+    const call =
+      line.includes('item_completed') &&
+      (line.includes('CommandExecution') || (sessionMatches && line.includes('McpToolCall')));
+    if (!meta && !call) continue;
     let entry;
     try {
       entry = JSON.parse(line);
     } catch {
       continue;
     }
-    const item = entry.payload?.item;
-    if (item?.type !== 'CommandExecution' || !item.duration) continue;
-    const command = Array.isArray(item.command) ? item.command.at(-1) : String(item.command ?? '');
-    if (!isForegroundPush(command) || !decodeURIComponent(String(item.cwd ?? '')).includes(match)) continue;
+    if (entry.type === 'session_meta') {
+      sessionMatches ||= decodeURIComponent(String(entry.payload?.cwd ?? '')).includes(match);
+      continue;
+    }
+    if (entry.payload?.type !== 'item_completed') continue;
+    const item = entry.payload.item;
+    if (!item?.duration) continue;
     const seconds = item.duration.secs + item.duration.nanos / 1e9;
     const at = Date.parse(entry.timestamp) / 1000 - seconds;
-    if (at < since || at >= until) continue;
-    pushes.push({ id: item.id, agent: 'codex', at, seconds, failed: item.exit_code !== 0 });
+    if (!(at >= since && at < until)) continue;
+    if (item.type === 'CommandExecution') {
+      const command = Array.isArray(item.command) ? item.command.at(-1) : String(item.command ?? '');
+      if (!decodeURIComponent(String(item.cwd ?? '')).includes(match)) continue;
+      calls.push({
+        id: item.id,
+        agent: 'codex',
+        at,
+        seconds,
+        failed: item.exit_code !== 0,
+        push: isForegroundPush(command),
+        verify: is.verifies(command),
+      });
+    } else if (item.type === 'McpToolCall') {
+      tools.push({
+        id: item.id,
+        agent: 'codex',
+        at,
+        seconds,
+        failed: item.status !== 'completed',
+        push: false,
+        verify: is.verifyingTool(`${item.server}__${item.tool}`),
+      });
+    }
   }
-  return pushes;
+  return [...calls, ...tools];
 }

@@ -45,6 +45,16 @@ const story = {
   testCases: [[0, 7_600], [12, 15_400], [13, 8_700], [25, 10_900]],
   mocksPer100: [[0, 17], [12, 23.5], [13, 15], [25, 11]],
   suppressions: [[0, 94], [8, 118], [25, 71]],
+  // A weed banned by a lint rule in week 9: no new copies, and the old ones cleaned up.
+  timers: [[0, 410], [9, 532], [10, 498], [25, 138]],
+  // Comments that excused workarounds went with them.
+  commentsPer1k: [[0, 96], [8, 104], [25, 71]],
+  workarounds: [[0, 310], [8, 424], [25, 158]],
+  // Corrections were going into AGENTS.md; from week 8 they became lint rules instead.
+  agentInstructions: [[0, 2_400], [8, 6_100], [10, 6_300], [11, 3_900], [25, 4_200]],
+  lintRules: [[0, 62], [8, 64], [25, 131]],
+  e2eTests: [[0, 12], [25, 48]],
+  propertyTests: [[0, 0], [10, 0], [11, 3], [25, 19]],
   sqlLarge: [[0, 55], [9, 71], [14, 71], [15, 52], [19, 50], [20, 38], [25, 34]],
   commits: [[0, 70], [8, 160], [25, 290]],
   fixShare: [[0, 0.46], [8, 0.58], [14, 0.44], [25, 0.27]],
@@ -53,6 +63,11 @@ const story = {
   rework: [[0, 0.44], [8, 0.52], [25, 0.26]],
   fixRework: [[0, 0.5], [8, 0.63], [25, 0.31]],
   afterReview: [[0, 3], [6, 4], [14, 3], [18, 2], [22, 1], [25, 1]],
+  revertShare: [[0, 0.004], [8, 0.011], [25, 0.005]],
+  // More PRs merge on checks alone as the checks improve, while reverts stay low.
+  unreviewed: [[0, 0.08], [8, 0.12], [25, 0.46]],
+  verifyCalls: [[4, 0.11], [8, 0.14], [25, 0.38]],
+  verifyTime: [[4, 0.31], [25, 0.62]],
   // Pre-push checks kept getting slower, then one PR scoped them to the change.
   pushSeconds: [[4, 150], [8, 215], [13, 340], [14, 72], [25, 58]],
   pushFail: [[4, 0.028], [13, 0.041], [14, 0.019], [25, 0.011]],
@@ -74,19 +89,37 @@ const rows = Array.from({ length: WEEKS }, (_, i) => {
       largeFiles: { count: largeFiles, lines: Math.round(largeFiles * jitter(1_640, 0.02)) },
       typeEscapes: { totalSource: Math.round(at('escapesSource', i, 0.02)), totalTest: Math.round(at('escapesTest', i, 0.015)) },
       suppressions: { total: Math.round(at('suppressions', i, 0.03)) },
+      weeds: { timers: { count: Math.round(at('timers', i, 0.02)), top: [] } },
+      comments: {
+        lines: Math.round((sourceLines * at('commentsPer1k', i, 0.01)) / 1000),
+        workarounds: Math.round(at('workarounds', i, 0.03)),
+        topWorkarounds: [],
+      },
+      agentInstructions: { files: 14, lines: Math.round(at('agentInstructions', i, 0.01)) },
+      lint: { rulesOn: Math.round(at('lintRules', i)), customRuleFiles: 0 },
       tests: { cases: testCases, mockModules: Math.round((testCases * at('mocksPer100', i, 0.03)) / 100) },
+      verification: {
+        propertyTestFiles: Math.round(at('propertyTests', i)),
+        e2eTestFiles: Math.round(at('e2eTests', i)),
+        formalSpecs: 0,
+      },
       sql: { largeFunctions: { count: Math.round(at('sqlLarge', i)) } },
     },
     outcomes: {
       commits: Math.round(at('commits', i, 0.22)),
       fixShare: at('fixShare', i, 0.12),
       cleanupShare: at('cleanupShare', i, 0.25),
+      revertShare: at('revertShare', i, 0.3),
       rework: { share: at('rework', i, 0.16) },
       fixRework: { share: at('fixRework', i, 0.18) },
     },
-    prs: { commitsAfterReview: { median: Math.round(at('afterReview', i)) } },
+    prs: {
+      commitsAfterReview: { median: Math.round(at('afterReview', i)) },
+      unreviewedShare: at('unreviewed', i, 0.08),
+    },
     // Agent transcripts only go back to week 4.
     pushes: i < 4 ? null : { medianSeconds: at('pushSeconds', i, 0.08), failureShare: at('pushFail', i, 0.15) },
+    verification: i < 4 ? null : { callShare: at('verifyCalls', i, 0.06), timeShare: at('verifyTime', i, 0.06) },
   };
 });
 

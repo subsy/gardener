@@ -7,11 +7,12 @@ import { openCache } from './cache.mjs';
 import { commitAtOrBefore, DAY } from './git.mjs';
 import { windowOutcomes } from './outcomes.mjs';
 import {
-  collectPushes,
+  collectAgentCalls,
   fetchMergedPrs,
   originRepo,
   prOutcomes,
   summarisePushes,
+  summariseVerification,
 } from './sources.mjs';
 import { cachedSnapshot } from './state.mjs';
 
@@ -36,7 +37,7 @@ export function weekLabel(start) {
 
 /**
  * Measures the last `weeks` complete weeks, oldest first. `github` and `transcripts` add
- * review load and push time; weeks those sources don't cover report null.
+ * review load, push time and verification share; weeks those sources don't cover report null.
  */
 export async function history(
   cwd,
@@ -54,8 +55,8 @@ export async function history(
   const reworkCache = openCache(cwd, 'rework', config, { disabled: noCache });
   const repo = github ? originRepo(cwd) : null;
   const lastStart = weekStart(now) - WEEK;
-  const pushes = transcripts
-    ? await collectPushes(
+  const calls = transcripts
+    ? await collectAgentCalls(
         config.transcripts,
         lastStart - (weeks - 1) * WEEK,
         lastStart + WEEK,
@@ -74,7 +75,8 @@ export async function history(
       state: cachedSnapshot(snapshots, cwd, commit, config),
       outcomes: await windowOutcomes(cwd, config, since, until, reworkCache),
       prs: repo ? prOutcomes(fetchMergedPrs(repo, since, until)) : null,
-      pushes: transcripts ? summarisePushes(pushes, since, until) : null,
+      pushes: summarisePushes(calls, since, until),
+      verification: summariseVerification(calls, since, until),
     };
     // Saved every week, so an interrupted multi-minute run resumes where it stopped.
     snapshots.save();

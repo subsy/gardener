@@ -168,6 +168,28 @@ export function logWindow(cwd, branch, since, until) {
   return commits.reverse();
 }
 
+const subjectMaps = new Map();
+
+/**
+ * Every first-parent commit on `branch` by title: Map(subject -> [{ sha, time }], newest
+ * first). Read once per branch per run, since a history run asks for it every week.
+ */
+export function firstParentSubjects(cwd, branch) {
+  const key = `${cwd}\0${branch}`;
+  if (!subjectMaps.has(key)) {
+    const map = new Map();
+    const out = git(cwd, ['log', '--first-parent', '--format=%H%x1f%ct%x1f%s', branch]);
+    for (const line of out.split('\n')) {
+      if (!line) continue;
+      const [sha, ct, subject] = line.split('\x1f');
+      if (!map.has(subject)) map.set(subject, []);
+      map.get(subject).push({ sha, time: Number(ct) });
+    }
+    subjectMaps.set(key, map);
+  }
+  return subjectMaps.get(key);
+}
+
 /**
  * Line ranges in `parent` that `sha` removed or rewrote, for files present on both sides.
  * Returns Map(path -> [[start, count]]).

@@ -21,11 +21,11 @@ import {
   historyHtml,
 } from './report.mjs';
 import {
+  agentOutcomes,
   fetchMergedPrs,
   fetchPr,
   originRepo,
   prOutcomes,
-  pushOutcomes,
 } from './sources.mjs';
 import { cachedSnapshot, snapshot } from './state.mjs';
 
@@ -43,7 +43,8 @@ Options
   --weeks <n>           Weeks of history
   --limit <n>           Hotspot rows (default 20)
   --github              Add merged-PR review load (needs the gh CLI)
-  --transcripts         Add agent push time from Claude Code and Codex transcripts
+  --transcripts         Add agent push time and verification share from Claude Code
+                        and Codex transcripts
   --html <file>         history: write the trend charts as a self-contained page
   --theme <name>        history: page theme, auto (default), dark or light
   --markdown            compare: print Markdown for a PR comment
@@ -107,10 +108,12 @@ async function main() {
     cache.save();
     const repo = values.github ? originRepo(cwd) : null;
     const prs = repo ? prOutcomes(fetchMergedPrs(repo, since, now)) : null;
-    const pushes = values.transcripts
-      ? await pushOutcomes(config.transcripts, since, now)
-      : null;
-    print({ outcomes, prs, pushes }, () => formatWindow(outcomes, prs, pushes));
+    const { pushes, verification } = values.transcripts
+      ? await agentOutcomes(config.transcripts, since, now)
+      : { pushes: null, verification: null };
+    print({ outcomes, prs, pushes, verification }, () =>
+      formatWindow(outcomes, prs, pushes, verification),
+    );
   } else if (command === 'hotspots') {
     const spots = hotspots(
       cwd,

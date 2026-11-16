@@ -9,12 +9,16 @@ const pct = (v) => `${(v * 100).toFixed(1)}%`;
 const int = (v) => Math.round(v).toLocaleString('en-US');
 const dec = (v) => v.toFixed(2);
 const mins = (v) => `${(v / 60).toFixed(1)} min`;
+const hours = (v) => `${v.toFixed(1)} h`;
+const one = (v) => v.toFixed(1);
 const ratio = (a, b) => (a == null || !b ? null : a / b);
 
 /**
  * The trend metrics. `better` is the healthy direction ('down', 'up' or null for volume);
  * `bars` marks per-week volumes, drawn as bars rather than lines; `tableOnly` keeps a close
- * variant of another metric out of the chart grid and in the table.
+ * variant of another metric out of the chart grid and in the table; `hideZero` leaves out a
+ * metric that never rose above zero, for things a codebase may simply not have.
+ * Your own weeds are added per repository by `metricsFor`.
  */
 export const METRICS = [
   {
@@ -61,6 +65,49 @@ export const METRICS = [
     better: 'down',
   },
   {
+    key: 'commentDensity',
+    label: 'Comment lines per 1,000 source lines',
+    get: (r) =>
+      ratio(
+        r.state.comments ? r.state.comments.lines * 1000 : null,
+        r.state.lines.source,
+      ),
+    fmt: one,
+    better: 'down',
+  },
+  {
+    key: 'workaroundComments',
+    label: 'Workaround comments',
+    get: (r) => r.state.comments?.workarounds ?? null,
+    fmt: int,
+    better: 'down',
+  },
+  {
+    key: 'agentInstructions',
+    label: 'Lines of agent instructions',
+    get: (r) => r.state.agentInstructions?.lines ?? null,
+    fmt: int,
+    better: null,
+    hideZero: true,
+  },
+  {
+    key: 'lintRules',
+    label: 'Lint rules turned on',
+    get: (r) => r.state.lint?.rulesOn ?? null,
+    fmt: int,
+    better: 'up',
+    hideZero: true,
+  },
+  {
+    key: 'customLintRules',
+    label: 'Custom lint rule files',
+    get: (r) => r.state.lint?.customRuleFiles ?? null,
+    fmt: int,
+    better: 'up',
+    tableOnly: true,
+    hideZero: true,
+  },
+  {
     key: 'testWeight',
     label: 'Test lines per source line',
     get: (r) => ratio(r.state.lines.test, r.state.lines.source),
@@ -73,6 +120,30 @@ export const METRICS = [
     get: (r) => ratio(r.state.tests.mockModules * 100, r.state.tests.cases),
     fmt: dec,
     better: 'down',
+  },
+  {
+    key: 'propertyTests',
+    label: 'Property-based test files',
+    get: (r) => r.state.verification?.propertyTestFiles ?? null,
+    fmt: int,
+    better: 'up',
+    hideZero: true,
+  },
+  {
+    key: 'e2eTests',
+    label: 'End-to-end test files',
+    get: (r) => r.state.verification?.e2eTestFiles ?? null,
+    fmt: int,
+    better: 'up',
+    hideZero: true,
+  },
+  {
+    key: 'formalSpecs',
+    label: 'Formal spec files',
+    get: (r) => r.state.verification?.formalSpecs ?? null,
+    fmt: int,
+    better: 'up',
+    hideZero: true,
   },
   {
     key: 'sqlLarge',
@@ -104,6 +175,21 @@ export const METRICS = [
     better: 'up',
   },
   {
+    key: 'revertShare',
+    label: 'Revert commits, share of all',
+    get: (r) => r.outcomes.revertShare ?? null,
+    fmt: pct,
+    better: 'down',
+  },
+  {
+    key: 'revertHours',
+    label: 'Hours from commit to its revert, median',
+    get: (r) => r.outcomes.reverts?.medianHours ?? null,
+    fmt: hours,
+    better: null,
+    tableOnly: true,
+  },
+  {
     key: 'rework',
     label: 'Rewritten lines under 14 days old',
     get: (r) => r.outcomes.rework.share,
@@ -126,6 +212,13 @@ export const METRICS = [
     better: 'down',
   },
   {
+    key: 'unreviewed',
+    label: 'PRs merged without a human review',
+    get: (r) => r.prs?.unreviewedShare ?? null,
+    fmt: pct,
+    better: null,
+  },
+  {
     key: 'pushTime',
     label: 'Agent push time, median',
     get: (r) => r.pushes?.medianSeconds ?? null,
@@ -139,7 +232,42 @@ export const METRICS = [
     fmt: pct,
     better: 'down',
   },
+  {
+    key: 'verifyCalls',
+    label: 'Agent commands that check the work',
+    get: (r) => r.verification?.callShare ?? null,
+    fmt: pct,
+    better: 'up',
+  },
+  {
+    key: 'verifyTime',
+    label: 'Agent command time spent checking',
+    get: (r) => r.verification?.timeShare ?? null,
+    fmt: pct,
+    better: 'up',
+    tableOnly: true,
+  },
 ];
+
+const weedLabel = (name) => `Weed: ${name}`;
+const weedCount = (state, name) => state.weeds?.[name]?.count ?? null;
+
+const weedNames = (states) => [
+  ...new Set(states.flatMap((state) => Object.keys(state?.weeds ?? {}))),
+];
+
+/** METRICS plus one per weed the rows measured, placed after lint suppressions. */
+export function metricsFor(rows) {
+  const weeds = weedNames(rows.map((r) => r.state)).map((name) => ({
+    key: `weed:${name}`,
+    label: weedLabel(name),
+    get: (r) => weedCount(r.state, name),
+    fmt: int,
+    better: 'down',
+  }));
+  const at = METRICS.findIndex((m) => m.key === 'suppressions') + 1;
+  return [...METRICS.slice(0, at), ...weeds, ...METRICS.slice(at)];
+}
 
 const show = (metric, value) =>
   value == null ? 'Unmeasured' : metric.fmt(value);
@@ -185,8 +313,24 @@ export function formatSnapshot(state) {
         ],
         ['Lint suppressions', int(state.suppressions.total)],
         [
+          'Comment lines per 1,000 source lines / workaround comments',
+          `${one(ratio(state.comments.lines * 1000, state.lines.source) ?? 0)} / ${int(state.comments.workarounds)}`,
+        ],
+        [
+          'Agent instruction files / lines',
+          `${int(state.agentInstructions.files)} / ${int(state.agentInstructions.lines)}`,
+        ],
+        [
+          'Lint rules turned on / custom rule files',
+          `${int(state.lint.rulesOn)} / ${int(state.lint.customRuleFiles)}`,
+        ],
+        [
           'Test cases / mocked modules / call assertions',
           `${int(state.tests.cases)} / ${int(state.tests.mockModules)} / ${int(state.tests.callAssertions)}`,
+        ],
+        [
+          'Property-based / end-to-end test files / formal specs',
+          `${int(state.verification.propertyTestFiles)} / ${int(state.verification.e2eTestFiles)} / ${int(state.verification.formalSpecs)}`,
         ],
         ...(state.sql
           ? [
@@ -205,6 +349,31 @@ export function formatSnapshot(state) {
       state.largeFiles.top.map((f) => [f.path, int(f.lines)]),
     ),
   ];
+  const weeds = Object.entries(state.weeds);
+  if (weeds.length) {
+    parts.push(
+      'Your weeds',
+      table(
+        ['Weed', 'Count', 'Most in'],
+        weeds.flatMap(([name, w]) =>
+          (w.top.length ? w.top.slice(0, 3) : [null]).map((f, i) => [
+            i === 0 ? name : '',
+            i === 0 ? int(w.count) : '',
+            f ? `${f.path} (${f.count})` : '',
+          ]),
+        ),
+      ),
+    );
+  }
+  if (state.comments.topWorkarounds.length) {
+    parts.push(
+      'Most workaround comments',
+      table(
+        ['Path', 'Comments'],
+        state.comments.topWorkarounds.map((f) => [f.path, int(f.count)]),
+      ),
+    );
+  }
   if (state.sql) {
     parts.push(
       'Most-redefined SQL functions',
@@ -222,8 +391,11 @@ const spread = (s) =>
   s?.median == null ? 'Unmeasured' : `${s.median} / ${s.p90}`;
 
 /** Terminal view of one outcome window. */
-export function formatWindow(o, prs, pushes) {
+export function formatWindow(o, prs, pushes, verification) {
   const share = (v) => (v == null ? 'Unmeasured' : pct(v));
+  const reverts = o.reverts?.count
+    ? `${int(o.reverts.count)} (${share(o.revertShare)})${o.reverts.medianHours == null ? '' : `, median ${hours(o.reverts.medianHours)} after the commit`}`
+    : `0 (${share(o.revertShare)})`;
   return [
     `Window ${day(o.since)} to ${day(o.until)}`,
     table(
@@ -239,6 +411,7 @@ export function formatWindow(o, prs, pushes) {
         ],
         ['Fix share', share(o.fixShare)],
         ['Cleanup share', share(o.cleanupShare)],
+        ['Reverts', reverts],
         [
           'Lines added / deleted / net',
           `${int(o.lines.added)} / ${int(o.lines.deleted)} / ${int(o.lines.net)}`,
@@ -257,10 +430,17 @@ export function formatWindow(o, prs, pushes) {
           'Commits after first review, median / p90',
           spread(prs?.commitsAfterReview),
         ],
+        ['Merged without a human review', share(prs?.unreviewedShare)],
         [
           'Agent pushes / median / p90 / failing',
           pushes
             ? `${pushes.pushes} / ${mins(pushes.medianSeconds)} / ${mins(pushes.p90Seconds)} / ${pct(pushes.failureShare)}`
+            : 'Unmeasured',
+        ],
+        [
+          'Agent commands checking the work, share of calls / time',
+          verification
+            ? `${share(verification.callShare)} / ${share(verification.timeShare)} of ${int(verification.calls)}`
             : 'Unmeasured',
         ],
       ],
@@ -284,8 +464,15 @@ const STATE_DELTAS = [
   ['Type escapes, source', (s) => s.typeEscapes.totalSource],
   ['Type escapes, tests', (s) => s.typeEscapes.totalTest],
   ['Lint suppressions', (s) => s.suppressions.total],
+  ['Comment lines', (s) => s.comments.lines],
+  ['Workaround comments', (s) => s.comments.workarounds],
+  ['Lines of agent instructions', (s) => s.agentInstructions.lines],
+  ['Lint rules turned on', (s) => s.lint.rulesOn],
   ['Test cases', (s) => s.tests.cases],
   ['Mocked modules', (s) => s.tests.mockModules],
+  ['Property-based test files', (s) => s.verification.propertyTestFiles],
+  ['End-to-end test files', (s) => s.verification.e2eTestFiles],
+  ['Formal spec files', (s) => s.verification.formalSpecs],
   [
     'SQL functions over the size limit',
     (s) => s.sql?.largeFunctions.count ?? 0,
@@ -299,7 +486,11 @@ export function formatCompare(
   { title, sha, touched, before, after, windows },
   markdown = false,
 ) {
-  const deltaRows = STATE_DELTAS.map(([label, get]) => [
+  const weedDeltas = weedNames([before, after]).map((name) => [
+    weedLabel(name),
+    (s) => weedCount(s, name) ?? 0,
+  ]);
+  const deltaRows = [...STATE_DELTAS, ...weedDeltas].map(([label, get]) => [
     label,
     int(get(before)),
     int(get(after)),
@@ -355,11 +546,12 @@ export function formatCompare(
 
 /** Terminal view of the weekly history: one row per week, a column per headline metric. */
 export function formatHistory(rows) {
-  const cols = METRICS.filter((m) =>
+  const cols = metricsFor(rows).filter((m) =>
     [
       'largeFiles',
       'escapesSource',
       'fixShare',
+      'revertShare',
       'rework',
       'afterReview',
       'pushTime',
@@ -383,14 +575,21 @@ const escapeHtml = (s) =>
  * 'light'; `note` is appended to the line under the title.
  */
 export function historyHtml(rows, { title = 'Garden health', note = '', theme = 'auto' } = {}) {
-  const series = METRICS.map((m) => ({
-    label: m.label,
-    better: m.better,
-    bars: Boolean(m.bars),
-    tableOnly: Boolean(m.tableOnly),
-    values: rows.map((r) => m.get(r)),
-    shown: rows.map((r) => show(m, m.get(r))),
-  })).filter((s) => s.values.some((v) => v != null));
+  const series = metricsFor(rows)
+    .filter((m) =>
+      rows.some((r) => {
+        const v = m.get(r);
+        return v != null && !(m.hideZero && v === 0);
+      }),
+    )
+    .map((m) => ({
+      label: m.label,
+      better: m.better,
+      bars: Boolean(m.bars),
+      tableOnly: Boolean(m.tableOnly),
+      values: rows.map((r) => m.get(r)),
+      shown: rows.map((r) => show(m, m.get(r))),
+    }));
   const weeks = rows.map((r) => r.week);
   const charted = series.filter((s) => !s.tableOnly);
   const data = JSON.stringify({ weeks, series: charted }).replace(/</g, '\\u003c');
