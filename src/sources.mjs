@@ -91,15 +91,20 @@ const isBot = (author) =>
   author?.__typename === 'Bot' || /\[bot\]$/.test(author?.login ?? '');
 
 /**
- * Whether anyone other than the PR's author and bots left a review. A PR with more reviews
- * than were fetched counts as reviewed.
+ * Whether anyone other than the PR's author and bots left a review; null when no fetched
+ * review is a person's but more reviews exist than were fetched, so the answer is unknown.
  */
 export function humanReviewed(pr) {
-  if (pr.reviews.totalCount > pr.reviews.nodes.length) return true;
-  return pr.reviews.nodes.some(
+  const human = pr.reviews.nodes.some(
     (r) => r.author && !isBot(r.author) && r.author.login !== pr.author?.login,
   );
+  if (human) return true;
+  return pr.reviews.totalCount > pr.reviews.nodes.length ? null : false;
 }
+
+/** Share of `items` that pass `test`; null for an empty list. */
+const share = (items, test) =>
+  items.length ? items.filter(test).length / items.length : null;
 
 /**
  * Review load per merged PR: commits, commits pushed after the first review (fix rounds),
@@ -121,9 +126,7 @@ export function prOutcomes(prs) {
   const threads = prs.map((p) => p.reviewThreads.totalCount);
   return {
     prs: prs.length,
-    unreviewedShare: prs.length
-      ? prs.filter((p) => !humanReviewed(p)).length / prs.length
-      : null,
+    unreviewedShare: share(prs.map(humanReviewed).filter((r) => r !== null), (r) => !r),
     commitsPerPr: {
       median: quantile(commits, 0.5),
       p90: quantile(commits, 0.9),

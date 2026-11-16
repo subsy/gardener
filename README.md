@@ -384,7 +384,7 @@ Every command takes `--json`, `--branch <ref>`, `--config <file>` and `--no-cach
 | Type escapes | Matches of each `patterns.typeEscapes` regex, in source and tests separately. |
 | Lint suppressions | Matches of each `patterns.suppressions` regex. |
 | Weeds | Matches of each `weeds` pattern, in files matching its `in` globs (default: source files) and not its `except` globs. |
-| Comments | Source lines where `patterns.comment` matches (whole-line and trailing comments). Workaround comments are those whose comment text matches `patterns.workaroundComments`, case-insensitively. |
+| Comments | Source lines where `patterns.comment` matches (whole-line and trailing comments), and every line of a `/* … */` block. Workaround comments are those whose comment text matches `patterns.workaroundComments`, case-insensitively. |
 | Agent instructions | Files matching `agentInstructions` (AGENTS.md, CLAUDE.md, Cursor rules, skills and more) and their lines. |
 | Lint rules | Matches of `patterns.enabledRule` (a rule set to `error` or `warn`) in files matching `lintConfigs`, and the number of files matching `lintRuleFiles`. |
 | Test weight | Matches of `testCases`, `mockModules`, `callAssertions` and `assertions` in test files. |
@@ -400,7 +400,7 @@ Every command takes `--json`, `--branch <ref>`, `--config <file>` and `--no-cach
 | Revert share | Commits titled `Revert "…"` or `revert: …`. Time to revert is from the reverted commit, found on the branch by its title (with or without a squash merge's ` (#123)`), to the revert. |
 | Rework | Lines rewritten in existing files whose `git blame --since` origin is within `reworkDays`, over an even sample of up to `reworkSample` commits. |
 | Commits after first review | Per merged PR, commits after its first review, from its last 40 commits. PRs whose 40 all follow the review are left out. |
-| Merged without a human review | Merged PRs with no review from anyone other than the author and bots (GitHub Apps, or logins ending `[bot]`). |
+| Merged without a human review | Merged PRs with no review from anyone other than the author and bots (GitHub Apps, or logins ending `[bot]`). Only a PR's first 50 reviews are fetched; a PR with more, none of them from a person, is left out. |
 | Agent push time | Foreground `git push` calls from Claude Code transcripts and Codex sessions in this repository, deduplicated across resumed sessions. |
 | Agent commands that check the work | Of the shell commands and MCP tool calls agents ran, the share (by count and by time) where a step of the command matches `transcripts.verifyCommands` or the tool's name matches `transcripts.verifyTools`. Background and detached commands are left out. |
 

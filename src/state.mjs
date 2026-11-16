@@ -44,16 +44,26 @@ const compileWeeds = (weeds, isTest) =>
 
 /**
  * Comment lines in `text`, and how many of them excuse or defer. Only the comment's own text
- * is searched for excuses, so a variable named `tempWorkaround` doesn't count.
+ * is searched for excuses, so a variable named `tempWorkaround` doesn't count. Lines inside
+ * a `/* … *\/` block count whether or not they start with `*`.
  */
 export function commentLines(text, comment, workaround) {
   let lines = 0;
   let workarounds = 0;
+  let inBlock = false;
   for (const line of text.split('\n')) {
-    const match = comment.exec(line);
-    if (!match) continue;
+    let from = 0;
+    if (inBlock) {
+      inBlock = !line.includes('*/');
+    } else {
+      const match = comment.exec(line);
+      if (!match) continue;
+      from = match.index;
+      const opened = line.indexOf('/*', from);
+      inBlock = opened >= 0 && !line.includes('*/', opened + 2);
+    }
     lines += 1;
-    if (workaround.test(line.slice(match.index))) workarounds += 1;
+    if (workaround.test(line.slice(from))) workarounds += 1;
   }
   return { lines, workarounds };
 }

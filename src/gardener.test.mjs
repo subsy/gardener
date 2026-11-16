@@ -199,6 +199,11 @@ describe('snapshot', () => {
       commentLines('const hack = 1;\nconst x = 1; // Workaround\n', comment, workaround),
       { lines: 1, workarounds: 1 },
     );
+    // A block comment's plain lines are comments too, and the block ends at its `*/`.
+    assert.deepEqual(
+      commentLines('/*\nTODO: remove workaround\nmore context\n*/\nconst hack = 1;\n/* one */ const y = 2;\n', comment, /\b(?:workaround|hack|TODO)\b/i),
+      { lines: 5, workarounds: 1 },
+    );
   });
 
   test('measures each SQL function at its latest migration definition, honouring drops', () => {
@@ -611,8 +616,16 @@ describe('review load', () => {
     assert.equal(humanReviewed(pr('ana', [])), false);
     assert.equal(humanReviewed(pr('ana', [['ana'], ['coderabbitai', 'Bot'], ['old-ci[bot]']])), false);
     assert.equal(humanReviewed(pr('ana', [['coderabbitai', 'Bot'], ['ben']])), true);
-    assert.equal(humanReviewed(pr('ana', [['coderabbitai', 'Bot']], 80)), true);
-    const out = prOutcomes([pr('ana', []), pr('ana', [['ben']]), pr('ana', [['ana']]), pr('ana', [['ben']])]);
+    // 80 reviews, the fetched ones all bots: unknown, and left out of the share.
+    assert.equal(humanReviewed(pr('ana', [['coderabbitai', 'Bot']], 80)), null);
+    assert.equal(humanReviewed(pr('ana', [['coderabbitai', 'Bot'], ['ben']], 80)), true);
+    const out = prOutcomes([
+      pr('ana', []),
+      pr('ana', [['ben']]),
+      pr('ana', [['ana']]),
+      pr('ana', [['ben']]),
+      pr('ana', [['coderabbitai', 'Bot']], 80),
+    ]);
     assert.equal(out.unreviewedShare, 0.5);
     assert.equal(prOutcomes([]).unreviewedShare, null);
   });
