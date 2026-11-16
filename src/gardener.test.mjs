@@ -167,6 +167,8 @@ describe('snapshot', () => {
     r.write('.oxlintrc.json', '{ "rules": { "no-debugger": "deny", "no-alert": "allow" } }\n');
     r.write('legacy/.eslintrc.json', '{ "ecmaVersion": 2022, "rules": { "eqeqeq": 2, "indent": [1, 2], "no-var": 0 } }\n');
     r.write('tools/eslint-rules/no-timers.mjs', 'export default {};\n');
+    r.write('oxlint-plugin-app/rules/no-effect.ts', 'export default {};\n');
+    r.write('oxlint-plugin-app/rules/no-effect.test.ts', "it('x', () => {});\n");
     const s = snapshot(r.root, r.commit('feat: start', T0), config());
 
     // Comments are counted in source only; the test file's TODO isn't.
@@ -174,7 +176,7 @@ describe('snapshot', () => {
     assert.equal(s.comments.workarounds, 2);
     assert.deepEqual(s.comments.topWorkarounds, [{ path: 'src/a.ts', count: 2 }]);
     assert.deepEqual(s.agentInstructions, { files: 2, lines: 5 });
-    assert.deepEqual(s.lint, { rulesOn: 5, customRuleFiles: 1 });
+    assert.deepEqual(s.lint, { rulesOn: 5, customRuleFiles: 2 });
     assert.deepEqual(s.verification, {
       propertyTestFiles: 1,
       e2eTestFiles: 1,
@@ -332,11 +334,16 @@ describe('outcomes', () => {
     r.commit('Revert "feat: grow a (#7)" (#8)', T0 + DAY + 6 * 3600);
     r.write('src/b.ts', lines(5));
     r.commit('Revert "feat: never on this branch"', T0 + 2 * DAY);
+    // GitHub titles a revert PR after the original PR, without the squash commit's (#9).
+    r.write('src/c.ts', lines(5));
+    r.commit('fix: c (#9)', T0 + 2 * DAY + 3600);
+    r.remove('src/c.ts');
+    r.commit('Revert "fix: c" (#10)', T0 + 2 * DAY + 3 * 3600);
 
     const o = await windowOutcomes(r.root, config(), T0 + DAY / 2, T0 + 3 * DAY);
-    assert.equal(o.byType.revert, 2);
-    assert.equal(o.revertShare, 2 / 3);
-    assert.deepEqual(o.reverts, { count: 2, matched: 1, medianHours: 6 });
+    assert.equal(o.byType.revert, 3);
+    assert.equal(o.revertShare, 3 / 5);
+    assert.deepEqual(o.reverts, { count: 3, matched: 2, medianHours: 6 });
     assert.equal(o.cleanupShare, 0);
   });
 

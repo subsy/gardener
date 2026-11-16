@@ -397,7 +397,7 @@ Every command takes `--json`, `--branch <ref>`, `--config <file>` and `--no-cach
 |---|---|
 | Fix share | First-parent commits typed `fix`, by conventional prefix or leading verb. |
 | Cleanup share | `refactor` commits plus other commits, reverts aside, that deleted more than they added. |
-| Revert share | Commits titled `Revert "…"` or `revert: …`. Time to revert is from the reverted commit, found on the branch by its exact title, to the revert. |
+| Revert share | Commits titled `Revert "…"` or `revert: …`. Time to revert is from the reverted commit, found on the branch by its title (with or without a squash merge's ` (#123)`), to the revert. |
 | Rework | Lines rewritten in existing files whose `git blame --since` origin is within `reworkDays`, over an even sample of up to `reworkSample` commits. |
 | Commits after first review | Per merged PR, commits after its first review, from its last 40 commits. PRs whose 40 all follow the review are left out. |
 | Merged without a human review | Merged PRs with no review from anyone other than the author and bots (GitHub Apps, or logins ending `[bot]`). |

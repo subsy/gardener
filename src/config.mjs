@@ -90,12 +90,15 @@ export const DEFAULTS = {
     '**/biome.json',
     '**/biome.jsonc',
     '**/.dependency-cruiser.{js,cjs,mjs,json}',
+    // Vite+ keeps lint settings in the root Vite config.
+    'vite.config.{ts,mts,js,mjs}',
   ],
-  // Source files of lint rules written for this codebase.
+  // Source files of lint rules written for this codebase; their tests aren't counted.
   lintRuleFiles: [
     '**/eslint-rules/**/*.{js,mjs,cjs,ts,mts,cts}',
     '**/lint-rules/**/*.{js,mjs,cjs,ts,mts,cts}',
     '**/eslint-plugin-*/**/rules/**/*.{js,mjs,cjs,ts,mts,cts}',
+    '**/oxlint-plugin-*/**/rules/**/*.{js,mjs,cjs,ts,mts,cts}',
     '**/*.grit',
   ],
   // Formal models and proofs: TLA+, Lean, Alloy, Quint, Dafny.
@@ -240,6 +243,7 @@ export function classifiers(config) {
     const matches = anyGlob(globs);
     return (path) => matches(path) && !ignored(path);
   };
+  const isLintRuleFile = kept(config.lintRuleFiles);
   // Schemas carry SQL change; migrations are write-once copies of it and would double-count.
   const schemaFiles = config.sql
     ? anyGlob(config.sql.schemas ?? [])
@@ -250,7 +254,7 @@ export function classifiers(config) {
     isTest: (path) => test(path),
     isAgentInstructions: kept(config.agentInstructions),
     isLintConfig: kept(config.lintConfigs),
-    isLintRule: kept(config.lintRuleFiles),
+    isLintRule: (path) => isLintRuleFile(path) && !test(path),
     isFormalSpec: kept(config.formalSpecs),
     /** Files whose churn says something about health: not ignored, generated or fan-out noise. */
     isChurn: (path) =>

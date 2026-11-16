@@ -172,7 +172,9 @@ const subjectMaps = new Map();
 
 /**
  * Every first-parent commit on `branch` by title: Map(subject -> [{ sha, time }], newest
- * first). Read once per branch per run, since a history run asks for it every week.
+ * first). A squash merge's ` (#123)` suffix is also stripped into its own key, because
+ * GitHub titles a revert PR after the original PR, which lacks it. Read once per branch per
+ * run, since a history run asks for it every week.
  */
 export function firstParentSubjects(cwd, branch) {
   const key = `${cwd}\0${branch}`;
@@ -182,8 +184,11 @@ export function firstParentSubjects(cwd, branch) {
     for (const line of out.split('\n')) {
       if (!line) continue;
       const [sha, ct, subject] = line.split('\x1f');
-      if (!map.has(subject)) map.set(subject, []);
-      map.get(subject).push({ sha, time: Number(ct) });
+      const commit = { sha, time: Number(ct) };
+      for (const key of new Set([subject, subject.replace(/\s+\(#\d+\)$/, '')])) {
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(commit);
+      }
     }
     subjectMaps.set(key, map);
   }
