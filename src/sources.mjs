@@ -18,7 +18,7 @@ const PR_QUERY = `query($q: String!, $after: String) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
-      number title createdAt mergedAt
+      number title baseRefName createdAt mergedAt
       labels(first: 20) { nodes { name } }
       closingIssuesReferences(first: 10) { nodes { labels(first: 20) { nodes { name } } } }
       author { login }
@@ -121,13 +121,24 @@ export function hasBacklogLabel(pr, labels) {
 }
 
 /**
+ * The branch name PRs target when they land on `branch` (gardener's `origin/main` is `main`); null
+ * for a detached `HEAD`, where no base can be matched.
+ */
+export function baseBranchName(branch) {
+  if (!branch || branch === 'HEAD') return null;
+  return branch.replace(/^(refs\/remotes\/[^/]+\/|refs\/heads\/|origin\/)/, '');
+}
+
+/**
  * Review load per merged PR: commits, commits pushed after the first review (fix rounds),
  * review threads opened, and the share merged without a human review. With `backlogLabels`,
- * also how many fix PRs were planned backlog work (see `hasBacklogLabel`). Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
+ * also how many fix PRs merged into `baseBranch` were planned backlog work (see
+ * `hasBacklogLabel`); a PR merged into another branch, such as an upper layer of a stack, never
+ * becomes its own commit on the measured branch. Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
  * them follows the first review the true count is unknown, so that PR is left out of the
  * after-review figures rather than undercounted.
  */
-export function prOutcomes(prs, backlogLabels = []) {
+export function prOutcomes(prs, { backlogLabels = [], baseBranch = null } = {}) {
   if (!prs) return null;
   const commits = prs.map((p) => p.commits.totalCount);
   const afterReview = prs.flatMap((p) => {
@@ -139,7 +150,9 @@ export function prOutcomes(prs, backlogLabels = []) {
     return truncated && after === nodes.length ? [] : [after];
   });
   const threads = prs.map((p) => p.reviewThreads.totalCount);
-  const fixPrs = prs.filter((p) => commitType(p.title) === 'fix');
+  const fixPrs = prs.filter(
+    (p) => commitType(p.title) === 'fix' && (baseBranch == null || p.baseRefName === baseBranch),
+  );
   const backlogFixPrs = backlogLabels.length
     ? fixPrs.filter((p) => hasBacklogLabel(p, backlogLabels)).length
     : null;

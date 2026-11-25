@@ -7,6 +7,7 @@ import { openCache } from './cache.mjs';
 import { commitAtOrBefore, DAY } from './git.mjs';
 import { windowOutcomes } from './outcomes.mjs';
 import {
+  baseBranchName,
   collectAgentCalls,
   fetchMergedPrs,
   originRepo,
@@ -74,7 +75,10 @@ export async function history(
       until,
       state: cachedSnapshot(snapshots, cwd, commit, config),
       outcomes: await windowOutcomes(cwd, config, since, until, reworkCache),
-      prs: repo ? prOutcomes(fetchMergedPrs(repo, since, until), config.backlogLabels) : null,
+      prs: repo ? prOutcomes(fetchMergedPrs(repo, since, until), {
+        backlogLabels: config.backlogLabels,
+        baseBranch: baseBranchName(config.branch),
+      }) : null,
       pushes: summarisePushes(calls, since, until),
       verification: summariseVerification(calls, since, until),
     };

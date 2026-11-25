@@ -23,7 +23,14 @@ import {
   windowOutcomes,
 } from './outcomes.mjs';
 import { formatCompare, formatWindow, freshFixShare, historyHtml } from './report.mjs';
-import { agentOutcomes, hasBacklogLabel, humanReviewed, prOutcomes, verifyClassifier } from './sources.mjs';
+import {
+  agentOutcomes,
+  baseBranchName,
+  hasBacklogLabel,
+  humanReviewed,
+  prOutcomes,
+  verifyClassifier,
+} from './sources.mjs';
 import { commentLines, signature, snapshot, sqlFunctions } from './state.mjs';
 
 const T0 = Date.UTC(2026, 0, 5) / 1000;
@@ -634,8 +641,9 @@ describe('review load', () => {
 });
 
 describe('backlog fixes', () => {
-  const pr = (title, prLabels = [], issueLabels = []) => ({
+  const pr = (title, prLabels = [], issueLabels = [], baseRefName = 'main') => ({
     title,
+    baseRefName,
     commits: { totalCount: 1, nodes: [] },
     reviews: { totalCount: 0, nodes: [] },
     reviewThreads: { totalCount: 0 },
@@ -660,10 +668,21 @@ describe('backlog fixes', () => {
       pr('fix: c'),
       pr('feat: d', ['strix']),
     ];
-    const out = prOutcomes(prs, ['strix', 'pre-existing']);
+    const out = prOutcomes(prs, { backlogLabels: ['strix', 'pre-existing'] });
     assert.equal(out.fixPrs, 3);
     assert.equal(out.backlogFixPrs, 2);
     assert.equal(prOutcomes(prs).backlogFixPrs, null);
+  });
+
+  test('only fix PRs merged into the measured branch count', () => {
+    // A stack's upper layer merges into the layer below, so it never lands as its own commit.
+    const prs = [pr('fix: a', ['strix']), pr('fix: b', ['strix'], [], 'feat/lower-layer')];
+    const out = prOutcomes(prs, { backlogLabels: ['strix'], baseBranch: 'main' });
+    assert.equal(out.fixPrs, 1);
+    assert.equal(out.backlogFixPrs, 1);
+    assert.equal(baseBranchName('origin/main'), 'main');
+    assert.equal(baseBranchName('release/1.0'), 'release/1.0');
+    assert.equal(baseBranchName('HEAD'), null);
   });
 
   test('fix share without backlog work takes the backlog fixes out of both counts', () => {
@@ -687,10 +706,11 @@ describe('backlog fixes', () => {
       fixRework: { share: null },
       reworkSampled: { all: 0, fix: 0 },
     };
-    const prs = prOutcomes([pr('fix: a', ['strix']), pr('fix: b')], ['strix']);
+    const prs = prOutcomes([pr('fix: a', ['strix']), pr('fix: b')], { backlogLabels: ['strix'] });
     const text = formatWindow(o, prs, null);
     assert.match(text, /Fix PRs that were backlog work\s+1 of 2 \(50\.0%\)/);
     assert.match(text, /Fix share without backlog work\s+55\.6%/);
+    assert.doesNotMatch(formatWindow(o, prOutcomes([pr('fix: a')]), null), /backlog/);
   });
 });
 

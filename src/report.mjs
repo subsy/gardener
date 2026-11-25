@@ -410,9 +410,7 @@ export function freshFixShare(o, prs) {
 }
 
 const backlogFixes = (prs) =>
-  prs?.backlogFixPrs == null
-    ? 'Unmeasured'
-    : `${int(prs.backlogFixPrs)} of ${int(prs.fixPrs)}${prs.fixPrs ? ` (${pct(prs.backlogFixPrs / prs.fixPrs)})` : ''}`;
+  `${int(prs.backlogFixPrs)} of ${int(prs.fixPrs)}${prs.fixPrs ? ` (${pct(prs.backlogFixPrs / prs.fixPrs)})` : ''}`;
 
 /** Terminal view of one outcome window. */
 export function formatWindow(o, prs, pushes, verification) {
@@ -434,8 +432,12 @@ export function formatWindow(o, prs, pushes, verification) {
             .join(', '),
         ],
         ['Fix share', share(o.fixShare)],
-        ['Fix PRs that were backlog work', backlogFixes(prs)],
-        ['Fix share without backlog work', share(freshFixShare(o, prs))],
+        ...(prs?.backlogFixPrs == null
+          ? []
+          : [
+              ['Fix PRs that were backlog work', backlogFixes(prs)],
+              ['Fix share without backlog work', share(freshFixShare(o, prs))],
+            ]),
         ['Cleanup share', share(o.cleanupShare)],
         ['Reverts', reverts],
         [
