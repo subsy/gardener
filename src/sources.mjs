@@ -11,14 +11,14 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { git } from './git.mjs';
-import { commitType } from './outcomes.mjs';
 
 const PR_QUERY = `query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 50, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
-      number title baseRefName createdAt mergedAt
+      number createdAt mergedAt
+      mergeCommit { oid }
       labels(first: 20) { nodes { name } }
       closingIssuesReferences(first: 10) { nodes { labels(first: 20) { nodes { name } } } }
       author { login }
@@ -121,24 +121,24 @@ export function hasBacklogLabel(pr, labels) {
 }
 
 /**
- * The branch name PRs target when they land on `branch` (gardener's `origin/main` is `main`); null
- * for a detached `HEAD`, where no base can be matched.
+ * Merge commits of the merged PRs that carry one of `labels` or close an issue that does; null
+ * without labels or PR data. `windowOutcomes` matches them against the branch's own commits, so a
+ * PR merged elsewhere (an upper layer of a stack) or missing from the local branch never counts.
  */
-export function baseBranchName(branch) {
-  if (!branch || branch === 'HEAD') return null;
-  return branch.replace(/^(refs\/remotes\/[^/]+\/|refs\/heads\/|origin\/)/, '');
+export function backlogMergeCommits(prs, labels) {
+  if (!prs || !labels.length) return null;
+  return new Set(
+    prs.filter((p) => p.mergeCommit && hasBacklogLabel(p, labels)).map((p) => p.mergeCommit.oid),
+  );
 }
 
 /**
  * Review load per merged PR: commits, commits pushed after the first review (fix rounds),
- * review threads opened, and the share merged without a human review. With `backlogLabels`,
- * also how many fix PRs merged into `baseBranch` were planned backlog work (see
- * `hasBacklogLabel`); a PR merged into another branch, such as an upper layer of a stack, never
- * becomes its own commit on the measured branch. Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
+ * review threads opened, and the share merged without a human review. Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
  * them follows the first review the true count is unknown, so that PR is left out of the
  * after-review figures rather than undercounted.
  */
-export function prOutcomes(prs, { backlogLabels = [], baseBranch = null } = {}) {
+export function prOutcomes(prs) {
   if (!prs) return null;
   const commits = prs.map((p) => p.commits.totalCount);
   const afterReview = prs.flatMap((p) => {
@@ -150,16 +150,8 @@ export function prOutcomes(prs, { backlogLabels = [], baseBranch = null } = {}) 
     return truncated && after === nodes.length ? [] : [after];
   });
   const threads = prs.map((p) => p.reviewThreads.totalCount);
-  const fixPrs = prs.filter(
-    (p) => commitType(p.title) === 'fix' && (baseBranch == null || p.baseRefName === baseBranch),
-  );
-  const backlogFixPrs = backlogLabels.length
-    ? fixPrs.filter((p) => hasBacklogLabel(p, backlogLabels)).length
-    : null;
   return {
     prs: prs.length,
-    fixPrs: fixPrs.length,
-    backlogFixPrs,
     unreviewedShare: share(prs.map(humanReviewed).filter((r) => r !== null), (r) => !r),
     commitsPerPr: {
       median: quantile(commits, 0.5),

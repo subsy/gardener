@@ -63,8 +63,8 @@ For the rest of the picture, add the optional sources:
 
 - `--github` adds review load per merged PR, and how many PRs merged without a human
   review. It needs the [GitHub CLI](https://cli.github.com/), signed in. With
-  `backlogLabels` set, it also counts the fix PRs that were backlog work (a security finding,
-  an old bug a review turned up) and reports the fix share without them.
+  `backlogLabels` set, it also counts the fix commits whose PR was backlog work (a security
+  finding, an old bug a review turned up) and reports the fix share without them.
 - `--transcripts` adds how long your agents' `git push` takes (pre-push checks included),
   how often it fails, and how much of their command time went to checking the work. It
   reads Claude Code and Codex session logs on your machine.
@@ -280,7 +280,7 @@ points at a cause you can fix. Each can also mislead you, and the table says how
 | Test weight | Test lines per source line, and mocked modules per 100 test cases. Mock-heavy suites restate the implementation and break on every refactor. | Some code genuinely needs mocks. Compare against your own history, not an ideal. |
 | SQL function size | Long stored procedures get rewritten in full by every migration that touches them, so each change is a big risky diff. | Only dollar-quoted bodies are measured. |
 | Fix share | The share of work spent repairing rather than building. Sustained high values mean the code is fighting back. | Depends on commit titles: it reads `fix:` prefixes and titles starting "Fix …". |
-| Fix share without backlog work | Fix share with the fix PRs that were planned backlog work taken out, so a week spent burning down security findings doesn't read as new breakage. | Needs `--github` and `backlogLabels`. A fix PR counts as backlog work when it, or an issue it closes, carries one of the labels. |
+| Fix share without backlog work | Fix share with the fix commits that were planned backlog work taken out, so a week spent burning down security findings doesn't read as new breakage. | Needs `--github` and `backlogLabels`. A fix commit counts as backlog work when the PR it merged, or an issue that PR closes, carries one of the labels. |
 | Cleanup share | Refactors plus any commit that removed more than it added. If this stays near zero while the code doubles, nobody is weeding. | A big feature removal counts as cleanup. Reverts don't. |
 | Revert share | Changes that had to be undone. It's the plainest sign that more output came with less care. Lauren's team ships 11,000 PRs a month at about 0.5%. | Only reads revert titles: git's `Revert "…"` and a `revert:` prefix. A fix that undoes a change by hand is a fix. |
 | Rework | Of the lines commits rewrote, the share written in the previous 14 days. High rework means code is being written, then immediately rewritten: churn without progress. | Early-stage features legitimately churn. Look at the fix-only variant. |
@@ -400,7 +400,7 @@ Every command takes `--json`, `--branch <ref>`, `--config <file>` and `--no-cach
 | Measure | Definition |
 |---|---|
 | Fix share | First-parent commits typed `fix`, by conventional prefix or leading verb. |
-| Fix share without backlog work | (fix commits − backlog fix PRs) ÷ (commits − backlog fix PRs). A backlog fix PR is a PR merged into the measured branch whose title types as `fix` and which carries a `backlogLabels` label, or closes an issue that does. Assumes squash merges, so one PR is one commit. |
+| Fix share without backlog work | (fix commits − backlog fixes) ÷ (commits − backlog fixes). A backlog fix is a `fix` commit on the measured branch that is the merge commit of a PR carrying a `backlogLabels` label, or closing an issue that does. |
 | Cleanup share | `refactor` commits plus other commits, reverts aside, that deleted more than they added. |
 | Revert share | Commits titled `Revert "…"` or `revert: …`. Time to revert is from the reverted commit, found on the branch by its title (with or without a squash merge's ` (#123)`), to the revert. |
 | Rework | Lines rewritten in existing files whose `git blame --since` origin is within `reworkDays`, over an even sample of up to `reworkSample` commits. |

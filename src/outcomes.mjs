@@ -173,8 +173,11 @@ export async function rework(cwd, commits, config, { pathFilter, cache } = {}) {
   return { lines, recent, share: lines > 0 ? recent / lines : null };
 }
 
-/** Commit mix, net lines and rework for first-parent commits in [since, until). */
-export async function windowOutcomes(cwd, config, since, until, cache) {
+/**
+ * Commit mix, net lines and rework for first-parent commits in [since, until). With `backlog`, the
+ * merge commits of backlog PRs (`backlogMergeCommits`), also how many fix commits were backlog work.
+ */
+export async function windowOutcomes(cwd, config, since, until, cache, backlog = null) {
   const is = classifiers(config);
   const commits = logWindow(cwd, config.branch, since, until);
   const byType = {};
@@ -218,6 +221,7 @@ export async function windowOutcomes(cwd, config, since, until, cache) {
     commits: total,
     byType,
     fixShare: shareOf(byType.fix ?? 0),
+    backlogFixes: backlog ? fixes.filter((c) => backlog.has(c.sha)).length : null,
     cleanupShare: shareOf((byType.refactor ?? 0) + otherDeleting),
     revertShare: shareOf(byType.revert ?? 0),
     reverts: revertTimes(cwd, config.branch, commits),

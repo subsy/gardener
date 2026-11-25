@@ -25,7 +25,7 @@ import {
 import { formatCompare, formatWindow, freshFixShare, historyHtml } from './report.mjs';
 import {
   agentOutcomes,
-  baseBranchName,
+  backlogMergeCommits,
   hasBacklogLabel,
   humanReviewed,
   prOutcomes,
@@ -586,7 +586,6 @@ describe('parsing helpers', () => {
 describe('review load', () => {
   test('a PR whose fetched commits all follow its first review is left out, not undercounted', () => {
     const pr = (total, dates) => ({
-      title: 'feat: a',
       commits: {
         totalCount: total,
         nodes: dates.map((d) => ({ commit: { committedDate: d } })),
@@ -610,7 +609,6 @@ describe('review load', () => {
 
   test('a PR counts as human-reviewed only when someone other than its author and bots reviewed it', () => {
     const pr = (author, reviewers, totalCount = reviewers.length) => ({
-      title: 'feat: a',
       author: { login: author },
       commits: { totalCount: 1, nodes: [] },
       reviews: {
@@ -641,76 +639,58 @@ describe('review load', () => {
 });
 
 describe('backlog fixes', () => {
-  const pr = (title, prLabels = [], issueLabels = [], baseRefName = 'main') => ({
-    title,
-    baseRefName,
-    commits: { totalCount: 1, nodes: [] },
-    reviews: { totalCount: 0, nodes: [] },
-    reviewThreads: { totalCount: 0 },
+  const pr = (oid, prLabels = [], issueLabels = []) => ({
+    mergeCommit: oid ? { oid } : null,
     labels: { nodes: prLabels.map((name) => ({ name })) },
     closingIssuesReferences: {
       nodes: issueLabels.map((names) => ({ labels: { nodes: names.map((name) => ({ name })) } })),
     },
   });
 
-  test('a fix PR is backlog work when it, or an issue it closes, carries a backlog label', () => {
+  test('a PR is backlog work when it, or an issue it closes, carries a backlog label', () => {
     const labels = ['pre-existing', 'Strix'];
-    assert.equal(hasBacklogLabel(pr('fix: a', ['strix']), labels), true);
-    assert.equal(hasBacklogLabel(pr('fix: a', [], [['bug'], ['Pre-Existing']]), labels), true);
-    assert.equal(hasBacklogLabel(pr('fix: a', ['bug'], [['urgent']]), labels), false);
-    assert.equal(hasBacklogLabel(pr('fix: a', ['strix']), []), false);
+    assert.equal(hasBacklogLabel(pr('a', ['strix']), labels), true);
+    assert.equal(hasBacklogLabel(pr('a', [], [['bug'], ['Pre-Existing']]), labels), true);
+    assert.equal(hasBacklogLabel(pr('a', ['bug'], [['urgent']]), labels), false);
+    assert.equal(hasBacklogLabel(pr('a', ['strix']), []), false);
+    assert.deepEqual(backlogMergeCommits([pr('a', ['strix']), pr('b'), pr(null, ['strix'])], labels), new Set(['a']));
+    assert.equal(backlogMergeCommits([pr('a', ['strix'])], []), null);
+    assert.equal(backlogMergeCommits(null, labels), null);
   });
 
-  test('only fix PRs count, and the split is unmeasured without labels', () => {
-    const prs = [
-      pr('fix(db): a', ['strix']),
-      pr('fix: b', [], [['pre-existing']]),
-      pr('fix: c'),
-      pr('feat: d', ['strix']),
-    ];
-    const out = prOutcomes(prs, { backlogLabels: ['strix', 'pre-existing'] });
-    assert.equal(out.fixPrs, 3);
-    assert.equal(out.backlogFixPrs, 2);
-    assert.equal(prOutcomes(prs).backlogFixPrs, null);
+  test('only fix commits on the measured branch whose PR was backlog work count', async () => {
+    const r = repo();
+    const fix = r.commit('fix: a (#1)', T0);
+    r.commit('fix: b (#2)', T0 + 3600);
+    const feat = r.commit('feat: c (#3)', T0 + 7200);
+    r.commit('feat: d (#4)', T0 + 10800);
+    // A stack's upper layer merged into the layer below: its merge commit is not on this branch.
+    const backlog = new Set([fix, feat, 'f'.repeat(40)]);
+    const o = await windowOutcomes(r.root, config(), T0 - 1, T0 + DAY, undefined, backlog);
+    assert.equal(o.backlogFixes, 1);
+    assert.equal(freshFixShare(o), 1 / 3);
+    assert.equal((await windowOutcomes(r.root, config(), T0 - 1, T0 + DAY)).backlogFixes, null);
   });
 
-  test('only fix PRs merged into the measured branch count', () => {
-    // A stack's upper layer merges into the layer below, so it never lands as its own commit.
-    const prs = [pr('fix: a', ['strix']), pr('fix: b', ['strix'], [], 'feat/lower-layer')];
-    const out = prOutcomes(prs, { backlogLabels: ['strix'], baseBranch: 'main' });
-    assert.equal(out.fixPrs, 1);
-    assert.equal(out.backlogFixPrs, 1);
-    assert.equal(baseBranchName('origin/main'), 'main');
-    assert.equal(baseBranchName('release/1.0'), 'release/1.0');
-    assert.equal(baseBranchName('HEAD'), null);
-  });
-
-  test('fix share without backlog work takes the backlog fixes out of both counts', () => {
-    const o = { commits: 10, byType: { fix: 6, feat: 4 }, fixShare: 0.6 };
-    assert.equal(freshFixShare(o, { backlogFixPrs: 2 }), 4 / 8);
-    assert.equal(freshFixShare(o, { backlogFixPrs: null }), null);
-    assert.equal(freshFixShare(o, null), null);
-    assert.equal(freshFixShare({ ...o, fixShare: null }, { backlogFixPrs: 2 }), null);
-  });
-
-  test('the window report shows the backlog split', () => {
+  test('the window report shows the backlog split only when it was measured', () => {
     const o = {
       since: T0,
       until: T0 + DAY,
       commits: 10,
       byType: { fix: 6, feat: 4 },
       fixShare: 0.6,
+      backlogFixes: 2,
       cleanupShare: 0,
       lines: { added: 0, deleted: 0, net: 0 },
       rework: { share: null },
       fixRework: { share: null },
       reworkSampled: { all: 0, fix: 0 },
     };
-    const prs = prOutcomes([pr('fix: a', ['strix']), pr('fix: b')], { backlogLabels: ['strix'] });
-    const text = formatWindow(o, prs, null);
-    assert.match(text, /Fix PRs that were backlog work\s+1 of 2 \(50\.0%\)/);
-    assert.match(text, /Fix share without backlog work\s+55\.6%/);
-    assert.doesNotMatch(formatWindow(o, prOutcomes([pr('fix: a')]), null), /backlog/);
+    const text = formatWindow(o, prOutcomes([]), null);
+    assert.match(text, /Fix commits that were backlog work\s+2 of 6 \(33\.3%\)/);
+    assert.match(text, /Fix share without backlog work\s+50\.0%/);
+    assert.doesNotMatch(formatWindow({ ...o, backlogFixes: null }, prOutcomes([]), null), /backlog/);
+    assert.equal(freshFixShare({ ...o, fixShare: null }), null);
   });
 });
 

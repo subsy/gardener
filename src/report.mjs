@@ -170,7 +170,7 @@ export const METRICS = [
   {
     key: 'freshFixShare',
     label: 'Fix commits outside backlog work, share of all',
-    get: (r) => freshFixShare(r.outcomes, r.prs),
+    get: (r) => freshFixShare(r.outcomes),
     fmt: pct,
     better: 'down',
   },
@@ -397,20 +397,17 @@ export function formatSnapshot(state) {
 const spread = (s) =>
   s?.median == null ? 'Unmeasured' : `${s.median} / ${s.p90}`;
 
-/**
- * Fix share with the fix PRs that were backlog work taken out of both counts; null without
- * backlog labels or PR data. On a squash-merging repository a commit is a PR, so the PR count
- * comes off the commit count.
- */
-export function freshFixShare(o, prs) {
-  if (prs?.backlogFixPrs == null || o.fixShare == null) return null;
-  const fixes = o.byType.fix ?? 0;
-  const commits = o.commits - prs.backlogFixPrs;
-  return commits > 0 ? Math.max(0, fixes - prs.backlogFixPrs) / commits : null;
+/** Fix share with the fix commits that were backlog work taken out of both counts; null without them. */
+export function freshFixShare(o) {
+  if (o.backlogFixes == null || o.fixShare == null) return null;
+  const commits = o.commits - o.backlogFixes;
+  return commits > 0 ? ((o.byType.fix ?? 0) - o.backlogFixes) / commits : null;
 }
 
-const backlogFixes = (prs) =>
-  `${int(prs.backlogFixPrs)} of ${int(prs.fixPrs)}${prs.fixPrs ? ` (${pct(prs.backlogFixPrs / prs.fixPrs)})` : ''}`;
+const backlogFixes = (o) => {
+  const fixes = o.byType.fix ?? 0;
+  return `${int(o.backlogFixes)} of ${int(fixes)}${fixes ? ` (${pct(o.backlogFixes / fixes)})` : ''}`;
+};
 
 /** Terminal view of one outcome window. */
 export function formatWindow(o, prs, pushes, verification) {
@@ -432,11 +429,11 @@ export function formatWindow(o, prs, pushes, verification) {
             .join(', '),
         ],
         ['Fix share', share(o.fixShare)],
-        ...(prs?.backlogFixPrs == null
+        ...(o.backlogFixes == null
           ? []
           : [
-              ['Fix PRs that were backlog work', backlogFixes(prs)],
-              ['Fix share without backlog work', share(freshFixShare(o, prs))],
+              ['Fix commits that were backlog work', backlogFixes(o)],
+              ['Fix share without backlog work', share(freshFixShare(o))],
             ]),
         ['Cleanup share', share(o.cleanupShare)],
         ['Reverts', reverts],

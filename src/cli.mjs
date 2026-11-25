@@ -22,7 +22,7 @@ import {
 } from './report.mjs';
 import {
   agentOutcomes,
-  baseBranchName,
+  backlogMergeCommits,
   fetchMergedPrs,
   fetchPr,
   originRepo,
@@ -105,13 +105,12 @@ async function main() {
     const cache = openCache(cwd, 'rework', config, {
       disabled: values['no-cache'],
     });
-    const outcomes = await windowOutcomes(cwd, config, since, now, cache);
-    cache.save();
     const repo = values.github ? originRepo(cwd) : null;
-    const prs = repo ? prOutcomes(fetchMergedPrs(repo, since, now), {
-        backlogLabels: config.backlogLabels,
-        baseBranch: baseBranchName(config.branch),
-      }) : null;
+    const merged = repo ? fetchMergedPrs(repo, since, now) : null;
+    const backlog = backlogMergeCommits(merged, config.backlogLabels);
+    const outcomes = await windowOutcomes(cwd, config, since, now, cache, backlog);
+    cache.save();
+    const prs = prOutcomes(merged);
     const { pushes, verification } = values.transcripts
       ? await agentOutcomes(config.transcripts, since, now)
       : { pushes: null, verification: null };

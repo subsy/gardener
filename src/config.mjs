@@ -62,8 +62,8 @@ export const DEFAULTS = {
   minCommits: 5,
   minReworkLines: 100,
   // Issue or PR labels that mark planned backlog work (a security finding, an old bug a review
-  // turned up). With --github, fix PRs carrying one, or closing an issue that does, are counted
-  // apart, so a week spent burning the backlog down doesn't read as new breakage.
+  // turned up). With --github, fix commits whose PR carries one, or closes an issue that does, are
+  // counted apart, so a week spent burning the backlog down doesn't read as new breakage.
   backlogLabels: [],
   // compare: touched files this share of all commits also change are too shared to attribute.
   sharedFileShare: 0.05,
