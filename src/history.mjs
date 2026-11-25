@@ -74,7 +74,7 @@ export async function history(
       until,
       state: cachedSnapshot(snapshots, cwd, commit, config),
       outcomes: await windowOutcomes(cwd, config, since, until, reworkCache),
-      prs: repo ? prOutcomes(fetchMergedPrs(repo, since, until)) : null,
+      prs: repo ? prOutcomes(fetchMergedPrs(repo, since, until), config.backlogLabels) : null,
       pushes: summarisePushes(calls, since, until),
       verification: summariseVerification(calls, since, until),
     };

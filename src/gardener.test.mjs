@@ -22,8 +22,8 @@ import {
   verdict,
   windowOutcomes,
 } from './outcomes.mjs';
-import { formatCompare, formatWindow, historyHtml } from './report.mjs';
-import { agentOutcomes, humanReviewed, prOutcomes, verifyClassifier } from './sources.mjs';
+import { formatCompare, formatWindow, freshFixShare, historyHtml } from './report.mjs';
+import { agentOutcomes, hasBacklogLabel, humanReviewed, prOutcomes, verifyClassifier } from './sources.mjs';
 import { commentLines, signature, snapshot, sqlFunctions } from './state.mjs';
 
 const T0 = Date.UTC(2026, 0, 5) / 1000;
@@ -579,6 +579,7 @@ describe('parsing helpers', () => {
 describe('review load', () => {
   test('a PR whose fetched commits all follow its first review is left out, not undercounted', () => {
     const pr = (total, dates) => ({
+      title: 'feat: a',
       commits: {
         totalCount: total,
         nodes: dates.map((d) => ({ commit: { committedDate: d } })),
@@ -602,6 +603,7 @@ describe('review load', () => {
 
   test('a PR counts as human-reviewed only when someone other than its author and bots reviewed it', () => {
     const pr = (author, reviewers, totalCount = reviewers.length) => ({
+      title: 'feat: a',
       author: { login: author },
       commits: { totalCount: 1, nodes: [] },
       reviews: {
@@ -628,6 +630,67 @@ describe('review load', () => {
     ]);
     assert.equal(out.unreviewedShare, 0.5);
     assert.equal(prOutcomes([]).unreviewedShare, null);
+  });
+});
+
+describe('backlog fixes', () => {
+  const pr = (title, prLabels = [], issueLabels = []) => ({
+    title,
+    commits: { totalCount: 1, nodes: [] },
+    reviews: { totalCount: 0, nodes: [] },
+    reviewThreads: { totalCount: 0 },
+    labels: { nodes: prLabels.map((name) => ({ name })) },
+    closingIssuesReferences: {
+      nodes: issueLabels.map((names) => ({ labels: { nodes: names.map((name) => ({ name })) } })),
+    },
+  });
+
+  test('a fix PR is backlog work when it, or an issue it closes, carries a backlog label', () => {
+    const labels = ['pre-existing', 'Strix'];
+    assert.equal(hasBacklogLabel(pr('fix: a', ['strix']), labels), true);
+    assert.equal(hasBacklogLabel(pr('fix: a', [], [['bug'], ['Pre-Existing']]), labels), true);
+    assert.equal(hasBacklogLabel(pr('fix: a', ['bug'], [['urgent']]), labels), false);
+    assert.equal(hasBacklogLabel(pr('fix: a', ['strix']), []), false);
+  });
+
+  test('only fix PRs count, and the split is unmeasured without labels', () => {
+    const prs = [
+      pr('fix(db): a', ['strix']),
+      pr('fix: b', [], [['pre-existing']]),
+      pr('fix: c'),
+      pr('feat: d', ['strix']),
+    ];
+    const out = prOutcomes(prs, ['strix', 'pre-existing']);
+    assert.equal(out.fixPrs, 3);
+    assert.equal(out.backlogFixPrs, 2);
+    assert.equal(prOutcomes(prs).backlogFixPrs, null);
+  });
+
+  test('fix share without backlog work takes the backlog fixes out of both counts', () => {
+    const o = { commits: 10, byType: { fix: 6, feat: 4 }, fixShare: 0.6 };
+    assert.equal(freshFixShare(o, { backlogFixPrs: 2 }), 4 / 8);
+    assert.equal(freshFixShare(o, { backlogFixPrs: null }), null);
+    assert.equal(freshFixShare(o, null), null);
+    assert.equal(freshFixShare({ ...o, fixShare: null }, { backlogFixPrs: 2 }), null);
+  });
+
+  test('the window report shows the backlog split', () => {
+    const o = {
+      since: T0,
+      until: T0 + DAY,
+      commits: 10,
+      byType: { fix: 6, feat: 4 },
+      fixShare: 0.6,
+      cleanupShare: 0,
+      lines: { added: 0, deleted: 0, net: 0 },
+      rework: { share: null },
+      fixRework: { share: null },
+      reworkSampled: { all: 0, fix: 0 },
+    };
+    const prs = prOutcomes([pr('fix: a', ['strix']), pr('fix: b')], ['strix']);
+    const text = formatWindow(o, prs, null);
+    assert.match(text, /Fix PRs that were backlog work\s+1 of 2 \(50\.0%\)/);
+    assert.match(text, /Fix share without backlog work\s+55\.6%/);
   });
 });
 

@@ -107,7 +107,7 @@ async function main() {
     const outcomes = await windowOutcomes(cwd, config, since, now, cache);
     cache.save();
     const repo = values.github ? originRepo(cwd) : null;
-    const prs = repo ? prOutcomes(fetchMergedPrs(repo, since, now)) : null;
+    const prs = repo ? prOutcomes(fetchMergedPrs(repo, since, now), config.backlogLabels) : null;
     const { pushes, verification } = values.transcripts
       ? await agentOutcomes(config.transcripts, since, now)
       : { pushes: null, verification: null };

@@ -168,6 +168,13 @@ export const METRICS = [
     better: 'down',
   },
   {
+    key: 'freshFixShare',
+    label: 'Fix commits outside backlog work, share of all',
+    get: (r) => freshFixShare(r.outcomes, r.prs),
+    fmt: pct,
+    better: 'down',
+  },
+  {
     key: 'cleanupShare',
     label: 'Cleanup commits, share of all',
     get: (r) => r.outcomes.cleanupShare,
@@ -390,6 +397,23 @@ export function formatSnapshot(state) {
 const spread = (s) =>
   s?.median == null ? 'Unmeasured' : `${s.median} / ${s.p90}`;
 
+/**
+ * Fix share with the fix PRs that were backlog work taken out of both counts; null without
+ * backlog labels or PR data. On a squash-merging repository a commit is a PR, so the PR count
+ * comes off the commit count.
+ */
+export function freshFixShare(o, prs) {
+  if (prs?.backlogFixPrs == null || o.fixShare == null) return null;
+  const fixes = o.byType.fix ?? 0;
+  const commits = o.commits - prs.backlogFixPrs;
+  return commits > 0 ? Math.max(0, fixes - prs.backlogFixPrs) / commits : null;
+}
+
+const backlogFixes = (prs) =>
+  prs?.backlogFixPrs == null
+    ? 'Unmeasured'
+    : `${int(prs.backlogFixPrs)} of ${int(prs.fixPrs)}${prs.fixPrs ? ` (${pct(prs.backlogFixPrs / prs.fixPrs)})` : ''}`;
+
 /** Terminal view of one outcome window. */
 export function formatWindow(o, prs, pushes, verification) {
   const share = (v) => (v == null ? 'Unmeasured' : pct(v));
@@ -410,6 +434,8 @@ export function formatWindow(o, prs, pushes, verification) {
             .join(', '),
         ],
         ['Fix share', share(o.fixShare)],
+        ['Fix PRs that were backlog work', backlogFixes(prs)],
+        ['Fix share without backlog work', share(freshFixShare(o, prs))],
         ['Cleanup share', share(o.cleanupShare)],
         ['Reverts', reverts],
         [
@@ -551,11 +577,14 @@ export function formatHistory(rows) {
       'largeFiles',
       'escapesSource',
       'fixShare',
+      'freshFixShare',
       'revertShare',
       'rework',
       'afterReview',
       'pushTime',
-    ].includes(m.key),
+    ].includes(m.key) &&
+    // Only repos that configure backlog labels and pass --github get this column.
+    (m.key !== 'freshFixShare' || rows.some((r) => m.get(r) != null)),
   );
   return table(
     ['Week', ...cols.map((m) => m.label)],

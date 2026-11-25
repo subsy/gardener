@@ -11,13 +11,16 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { git } from './git.mjs';
+import { commitType } from './outcomes.mjs';
 
 const PR_QUERY = `query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 50, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
-      number createdAt mergedAt
+      number title createdAt mergedAt
+      labels(first: 20) { nodes { name } }
+      closingIssuesReferences(first: 10) { nodes { labels(first: 20) { nodes { name } } } }
       author { login }
       commits(last: 40) { totalCount nodes { commit { committedDate } } }
       reviews(first: 50) { totalCount nodes { submittedAt author { __typename login } } }
@@ -106,13 +109,25 @@ export function humanReviewed(pr) {
 const share = (items, test) =>
   items.length ? items.filter(test).length / items.length : null;
 
+/** Whether PR `pr` carries one of `labels`, or closes an issue that does, ignoring case. */
+export function hasBacklogLabel(pr, labels) {
+  if (!labels.length) return false;
+  const wanted = new Set(labels.map((l) => l.toLowerCase()));
+  const named = (nodes) => nodes.some((l) => wanted.has(l.name.toLowerCase()));
+  return (
+    named(pr.labels.nodes) ||
+    pr.closingIssuesReferences.nodes.some((issue) => named(issue.labels.nodes))
+  );
+}
+
 /**
  * Review load per merged PR: commits, commits pushed after the first review (fix rounds),
- * review threads opened, and the share merged without a human review. Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
+ * review threads opened, and the share merged without a human review. With `backlogLabels`,
+ * also how many fix PRs were planned backlog work (see `hasBacklogLabel`). Only a PR's last 40 commits are fetched (to keep GitHub API cost low); when every one of
  * them follows the first review the true count is unknown, so that PR is left out of the
  * after-review figures rather than undercounted.
  */
-export function prOutcomes(prs) {
+export function prOutcomes(prs, backlogLabels = []) {
   if (!prs) return null;
   const commits = prs.map((p) => p.commits.totalCount);
   const afterReview = prs.flatMap((p) => {
@@ -124,8 +139,14 @@ export function prOutcomes(prs) {
     return truncated && after === nodes.length ? [] : [after];
   });
   const threads = prs.map((p) => p.reviewThreads.totalCount);
+  const fixPrs = prs.filter((p) => commitType(p.title) === 'fix');
+  const backlogFixPrs = backlogLabels.length
+    ? fixPrs.filter((p) => hasBacklogLabel(p, backlogLabels)).length
+    : null;
   return {
     prs: prs.length,
+    fixPrs: fixPrs.length,
+    backlogFixPrs,
     unreviewedShare: share(prs.map(humanReviewed).filter((r) => r !== null), (r) => !r),
     commitsPerPr: {
       median: quantile(commits, 0.5),
