@@ -400,7 +400,7 @@ Every command takes `--json`, `--branch <ref>`, `--config <file>` and `--no-cach
 | Measure | Definition |
 |---|---|
 | Fix share | First-parent commits typed `fix`, by conventional prefix or leading verb. |
-| Fix share without backlog work | (fix commits − backlog fix PRs) ÷ (commits − backlog fix PRs). A backlog fix PR is a merged PR whose title types as `fix` and which carries a `backlogLabels` label, or closes an issue that does. Assumes squash merges, so one PR is one commit. |
+| Fix share without backlog work | (fix commits − backlog fix PRs) ÷ (commits − backlog fix PRs). A backlog fix PR is a PR merged into the measured branch whose title types as `fix` and which carries a `backlogLabels` label, or closes an issue that does. Assumes squash merges, so one PR is one commit. |
 | Cleanup share | `refactor` commits plus other commits, reverts aside, that deleted more than they added. |
 | Revert share | Commits titled `Revert "…"` or `revert: …`. Time to revert is from the reverted commit, found on the branch by its title (with or without a squash merge's ` (#123)`), to the revert. |
 | Rework | Lines rewritten in existing files whose `git blame --since` origin is within `reworkDays`, over an even sample of up to `reworkSample` commits. |
