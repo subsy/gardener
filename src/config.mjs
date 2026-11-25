@@ -61,6 +61,10 @@ export const DEFAULTS = {
   // Below these, a window's shares read as unmeasured rather than as a percentage of noise.
   minCommits: 5,
   minReworkLines: 100,
+  // Issue or PR labels that mark planned backlog work (a security finding, an old bug a review
+  // turned up). With --github, fix commits whose PR carries one, or closes an issue that does, are
+  // counted apart, so a week spent burning the backlog down doesn't read as new breakage.
+  backlogLabels: [],
   // compare: touched files this share of all commits also change are too shared to attribute.
   sharedFileShare: 0.05,
   // Your own weeds: name -> regex, or { pattern, in, except } to count it only in some paths.

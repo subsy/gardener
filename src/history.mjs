@@ -7,6 +7,7 @@ import { openCache } from './cache.mjs';
 import { commitAtOrBefore, DAY } from './git.mjs';
 import { windowOutcomes } from './outcomes.mjs';
 import {
+  backlogMergeCommits,
   collectAgentCalls,
   fetchMergedPrs,
   originRepo,
@@ -68,13 +69,15 @@ export async function history(
     const until = since + WEEK;
     const commit = commitAtOrBefore(cwd, config.branch, until - 1);
     if (!commit) continue;
+    const merged = repo ? fetchMergedPrs(repo, since, until) : null;
+    const backlog = backlogMergeCommits(merged, config.backlogLabels);
     const row = {
       week: weekLabel(since),
       since,
       until,
       state: cachedSnapshot(snapshots, cwd, commit, config),
-      outcomes: await windowOutcomes(cwd, config, since, until, reworkCache),
-      prs: repo ? prOutcomes(fetchMergedPrs(repo, since, until)) : null,
+      outcomes: await windowOutcomes(cwd, config, since, until, reworkCache, backlog),
+      prs: prOutcomes(merged),
       pushes: summarisePushes(calls, since, until),
       verification: summariseVerification(calls, since, until),
     };

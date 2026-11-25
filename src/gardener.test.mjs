@@ -22,8 +22,15 @@ import {
   verdict,
   windowOutcomes,
 } from './outcomes.mjs';
-import { formatCompare, formatWindow, historyHtml } from './report.mjs';
-import { agentOutcomes, humanReviewed, prOutcomes, verifyClassifier } from './sources.mjs';
+import { formatCompare, formatWindow, freshFixShare, historyHtml } from './report.mjs';
+import {
+  agentOutcomes,
+  backlogMergeCommits,
+  hasBacklogLabel,
+  humanReviewed,
+  prOutcomes,
+  verifyClassifier,
+} from './sources.mjs';
 import { commentLines, signature, snapshot, sqlFunctions } from './state.mjs';
 
 const T0 = Date.UTC(2026, 0, 5) / 1000;
@@ -628,6 +635,62 @@ describe('review load', () => {
     ]);
     assert.equal(out.unreviewedShare, 0.5);
     assert.equal(prOutcomes([]).unreviewedShare, null);
+  });
+});
+
+describe('backlog fixes', () => {
+  const pr = (oid, prLabels = [], issueLabels = []) => ({
+    mergeCommit: oid ? { oid } : null,
+    labels: { nodes: prLabels.map((name) => ({ name })) },
+    closingIssuesReferences: {
+      nodes: issueLabels.map((names) => ({ labels: { nodes: names.map((name) => ({ name })) } })),
+    },
+  });
+
+  test('a PR is backlog work when it, or an issue it closes, carries a backlog label', () => {
+    const labels = ['pre-existing', 'Strix'];
+    assert.equal(hasBacklogLabel(pr('a', ['strix']), labels), true);
+    assert.equal(hasBacklogLabel(pr('a', [], [['bug'], ['Pre-Existing']]), labels), true);
+    assert.equal(hasBacklogLabel(pr('a', ['bug'], [['urgent']]), labels), false);
+    assert.equal(hasBacklogLabel(pr('a', ['strix']), []), false);
+    assert.deepEqual(backlogMergeCommits([pr('a', ['strix']), pr('b'), pr(null, ['strix'])], labels), new Set(['a']));
+    assert.equal(backlogMergeCommits([pr('a', ['strix'])], []), null);
+    assert.equal(backlogMergeCommits(null, labels), null);
+  });
+
+  test('only fix commits on the measured branch whose PR was backlog work count', async () => {
+    const r = repo();
+    const fix = r.commit('fix: a (#1)', T0);
+    r.commit('fix: b (#2)', T0 + 3600);
+    const feat = r.commit('feat: c (#3)', T0 + 7200);
+    r.commit('feat: d (#4)', T0 + 10800);
+    // A stack's upper layer merged into the layer below: its merge commit is not on this branch.
+    const backlog = new Set([fix, feat, 'f'.repeat(40)]);
+    const o = await windowOutcomes(r.root, config(), T0 - 1, T0 + DAY, undefined, backlog);
+    assert.equal(o.backlogFixes, 1);
+    assert.equal(freshFixShare(o), 1 / 3);
+    assert.equal((await windowOutcomes(r.root, config(), T0 - 1, T0 + DAY)).backlogFixes, null);
+  });
+
+  test('the window report shows the backlog split only when it was measured', () => {
+    const o = {
+      since: T0,
+      until: T0 + DAY,
+      commits: 10,
+      byType: { fix: 6, feat: 4 },
+      fixShare: 0.6,
+      backlogFixes: 2,
+      cleanupShare: 0,
+      lines: { added: 0, deleted: 0, net: 0 },
+      rework: { share: null },
+      fixRework: { share: null },
+      reworkSampled: { all: 0, fix: 0 },
+    };
+    const text = formatWindow(o, prOutcomes([]), null);
+    assert.match(text, /Fix commits that were backlog work\s+2 of 6 \(33\.3%\)/);
+    assert.match(text, /Fix share without backlog work\s+50\.0%/);
+    assert.doesNotMatch(formatWindow({ ...o, backlogFixes: null }, prOutcomes([]), null), /backlog/);
+    assert.equal(freshFixShare({ ...o, fixShare: null }), null);
   });
 });
 

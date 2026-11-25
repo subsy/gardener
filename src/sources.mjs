@@ -18,6 +18,9 @@ const PR_QUERY = `query($q: String!, $after: String) {
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
       number createdAt mergedAt
+      mergeCommit { oid }
+      labels(first: 20) { nodes { name } }
+      closingIssuesReferences(first: 10) { nodes { labels(first: 20) { nodes { name } } } }
       author { login }
       commits(last: 40) { totalCount nodes { commit { committedDate } } }
       reviews(first: 50) { totalCount nodes { submittedAt author { __typename login } } }
@@ -105,6 +108,29 @@ export function humanReviewed(pr) {
 /** Share of `items` that pass `test`; null for an empty list. */
 const share = (items, test) =>
   items.length ? items.filter(test).length / items.length : null;
+
+/** Whether PR `pr` carries one of `labels`, or closes an issue that does, ignoring case. */
+export function hasBacklogLabel(pr, labels) {
+  if (!labels.length) return false;
+  const wanted = new Set(labels.map((l) => l.toLowerCase()));
+  const named = (nodes) => nodes.some((l) => wanted.has(l.name.toLowerCase()));
+  return (
+    named(pr.labels.nodes) ||
+    pr.closingIssuesReferences.nodes.some((issue) => named(issue.labels.nodes))
+  );
+}
+
+/**
+ * Merge commits of the merged PRs that carry one of `labels` or close an issue that does; null
+ * without labels or PR data. `windowOutcomes` matches them against the branch's own commits, so a
+ * PR merged elsewhere (an upper layer of a stack) or missing from the local branch never counts.
+ */
+export function backlogMergeCommits(prs, labels) {
+  if (!prs || !labels.length) return null;
+  return new Set(
+    prs.filter((p) => p.mergeCommit && hasBacklogLabel(p, labels)).map((p) => p.mergeCommit.oid),
+  );
+}
 
 /**
  * Review load per merged PR: commits, commits pushed after the first review (fix rounds),

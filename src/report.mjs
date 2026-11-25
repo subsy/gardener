@@ -168,6 +168,13 @@ export const METRICS = [
     better: 'down',
   },
   {
+    key: 'freshFixShare',
+    label: 'Fix commits outside backlog work, share of all',
+    get: (r) => freshFixShare(r.outcomes),
+    fmt: pct,
+    better: 'down',
+  },
+  {
     key: 'cleanupShare',
     label: 'Cleanup commits, share of all',
     get: (r) => r.outcomes.cleanupShare,
@@ -390,6 +397,18 @@ export function formatSnapshot(state) {
 const spread = (s) =>
   s?.median == null ? 'Unmeasured' : `${s.median} / ${s.p90}`;
 
+/** Fix share with the fix commits that were backlog work taken out of both counts; null without them. */
+export function freshFixShare(o) {
+  if (o.backlogFixes == null || o.fixShare == null) return null;
+  const commits = o.commits - o.backlogFixes;
+  return commits > 0 ? ((o.byType.fix ?? 0) - o.backlogFixes) / commits : null;
+}
+
+const backlogFixes = (o) => {
+  const fixes = o.byType.fix ?? 0;
+  return `${int(o.backlogFixes)} of ${int(fixes)}${fixes ? ` (${pct(o.backlogFixes / fixes)})` : ''}`;
+};
+
 /** Terminal view of one outcome window. */
 export function formatWindow(o, prs, pushes, verification) {
   const share = (v) => (v == null ? 'Unmeasured' : pct(v));
@@ -410,6 +429,12 @@ export function formatWindow(o, prs, pushes, verification) {
             .join(', '),
         ],
         ['Fix share', share(o.fixShare)],
+        ...(o.backlogFixes == null
+          ? []
+          : [
+              ['Fix commits that were backlog work', backlogFixes(o)],
+              ['Fix share without backlog work', share(freshFixShare(o))],
+            ]),
         ['Cleanup share', share(o.cleanupShare)],
         ['Reverts', reverts],
         [
@@ -551,11 +576,14 @@ export function formatHistory(rows) {
       'largeFiles',
       'escapesSource',
       'fixShare',
+      'freshFixShare',
       'revertShare',
       'rework',
       'afterReview',
       'pushTime',
-    ].includes(m.key),
+    ].includes(m.key) &&
+    // Only repos that configure backlog labels and pass --github get this column.
+    (m.key !== 'freshFixShare' || rows.some((r) => m.get(r) != null)),
   );
   return table(
     ['Week', ...cols.map((m) => m.label)],
