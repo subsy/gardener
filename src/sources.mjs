@@ -171,8 +171,8 @@ export function modelReader({ originModelPattern, originModels }) {
       throw new Error(`originModels "${name}" needs a regex that names the model`);
     return [name, re];
   });
-  const pattern = new RegExp(originModelPattern);
-  if (new RegExp(`${originModelPattern}|`).exec('').length < 2)
+  const pattern = named.length ? null : new RegExp(originModelPattern);
+  if (pattern && new RegExp(`${originModelPattern}|`).exec('').length < 2)
     throw new Error('originModelPattern needs a capture group for the model');
   const fromLine = named.length
     ? (line) => {

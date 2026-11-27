@@ -306,7 +306,10 @@ async function traceOrigins(cwd, config, commits, fixes, cache, backlog, originP
   const traced = fixes.filter((c) => !backlog?.has(c.sha));
   const origins = await fixOrigins(cwd, config, traced, originPrs, cache);
   const inWindow = new Set(commits.map((c) => c.sha));
-  const merged = originPrs.filter((p) => p.mergeCommit && inWindow.has(p.mergeCommit.oid));
+  // Only the window's own PRs carry a description; one fetched as an earlier origin doesn't.
+  const merged = originPrs.filter(
+    (p) => 'body' in p && p.mergeCommit && inWindow.has(p.mergeCommit.oid),
+  );
   return {
     fixOrigins: origins,
     originModels: originModels(merged, origins, modelReader(config)),

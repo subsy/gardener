@@ -759,6 +759,15 @@ describe('fix origins', () => {
     assert.ok(store.has(`origins:${fresh}`) && !store.has(`origins:${backlog}`));
     const again = await windowOutcomes(r.root, config(), since, until, cache, new Set([backlog]), prs);
     assert.deepEqual(again.fixOrigins, o.fixOrigins);
+    // A PR fetched only as an earlier origin has no description, so it isn't counted as merged
+    // in the window even when its merge commit's time falls inside it.
+    const earlyShape = prs.map((p) => (p.number === 2 ? { number: 2, mergeCommit: p.mergeCommit } : p));
+    const early = await windowOutcomes(r.root, config(), since, until, cache, new Set([backlog]), earlyShape);
+    assert.deepEqual(early.fixOrigins, o.fixOrigins);
+    assert.deepEqual(early.originModels, [
+      { model: 'Unattributed', merged: 2, repaired: 0 },
+      { model: 'Lane: GPT-6.2 Sol (Codex)', merged: 1, repaired: 0 },
+    ]);
 
     // Without PR data the window carries exactly the keys it always has.
     const plain = await windowOutcomes(r.root, config(), since, until, cache, new Set([backlog]));
@@ -811,6 +820,8 @@ describe('fix origins', () => {
     assert.throws(() => resolveConfig({ originModels: { Opus: '' } }), /needs a regex/);
     assert.throws(() => resolveConfig({ originModels: { Opus: '(opus)?' } }), /needs a regex/);
     assert.throws(() => resolveConfig({ originModels: 'opus' }), /must map/);
+    // Named models replace originModelPattern, so it isn't checked.
+    assert.doesNotThrow(() => resolveConfig({ originModels: { Opus: 'opus' }, originModelPattern: 'no group' }));
   });
 
   test('the window report shows origin rows only when origins were traced', () => {
