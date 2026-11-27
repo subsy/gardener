@@ -28,7 +28,7 @@ import {
   backlogMergeCommits,
   hasBacklogLabel,
   humanReviewed,
-  originModel,
+  modelReader,
   prOutcomes,
   verifyClassifier,
 } from './sources.mjs';
@@ -773,18 +773,44 @@ describe('fix origins', () => {
   });
 
   test('the model is read from the last matching line of the PR description', () => {
-    const pattern = resolveConfig({}).originModelPattern;
-    assert.equal(originModel('Claude Opus 5.5 via Claude Code (T3 Code).', pattern), 'Claude Opus 5.5');
-    assert.equal(originModel('Lane: GPT-6.2 Sol (Codex) via T3 Code', pattern), 'Lane: GPT-6.2 Sol (Codex)');
-    assert.equal(
-      originModel('Sent via the API\r\n\r\n  Claude   Opus 5.5 via Claude Code.  \r\n', pattern),
-      'Claude Opus 5.5',
-    );
-    assert.equal(originModel('Fixes the login page.', pattern), 'Unattributed');
-    assert.equal(originModel(null, pattern), 'Unattributed');
-    assert.equal(originModel('Model: Fable 5.2', '^Model: (.+)$'), 'Fable 5.2');
+    const read = modelReader(resolveConfig({}));
+    assert.equal(read('Claude Opus 5.5 via Claude Code (T3 Code).'), 'Claude Opus 5.5');
+    assert.equal(read('Lane: GPT-6.2 Sol (Codex) via T3 Code'), 'Lane: GPT-6.2 Sol (Codex)');
+    assert.equal(read('Sent via the API\r\n\r\n  Claude   Opus 5.5 via Claude Code.  \r\n'), 'Claude Opus 5.5');
+    assert.equal(read('Fixes the login page.'), 'Unattributed');
+    assert.equal(read(null), 'Unattributed');
+    assert.equal(modelReader(resolveConfig({ originModelPattern: '^Model: (.+)$' }))('Model: Fable 5.2'), 'Fable 5.2');
     assert.throws(() => resolveConfig({ originModelPattern: 'via .+' }), /capture group/);
     assert.throws(() => resolveConfig({ originModelPattern: '(' }));
+  });
+
+  test('with named models, the model named first on the last line naming any is the origin', () => {
+    const read = modelReader(
+      resolveConfig({
+        originModels: {
+          'Claude Opus 5.5': 'opus 5\\.5|claude-opus-5-5',
+          'GPT 6.1 Sol': '(?i)gpt[- ]?6\\.1[- ]sol',
+        },
+      }),
+    );
+    assert.equal(read('Claude Opus 5.5 (high) implemented it and GPT 6.1 Sol (high) reviewed it,'), 'Claude Opus 5.5');
+    assert.equal(
+      read('Written by GPT 6.1 Sol (high) in a T3 Code lane, reviewed by Claude Opus 5.5 (high). Nit fixes and PR by Ben.'),
+      'GPT 6.1 Sol',
+    );
+    assert.equal(read('Produced by GPT-6.1 Sol (implementer), Claude Opus 5.5 and Gemini (reviewers)'), 'GPT 6.1 Sol');
+    assert.equal(read('Refresh built by Claude Opus 5.5 in T3 Code, reviewed by GPT-6.1 Sol'), 'Claude Opus 5.5');
+    // A review table names a model higher up; the attribution line at the end decides.
+    assert.equal(
+      read('## Review\n| Reviewer | Score |\n| Claude Opus 5.5 | 7/10 |\n\nWritten by GPT-6.1 Sol in a T3 Code lane.'),
+      'GPT 6.1 Sol',
+    );
+    // Free prose that the default pattern would have caught names no configured model.
+    assert.equal(read('Surfaces: no API v2, MCP, or CLI via the gateway'), 'Unattributed');
+    assert.throws(() => resolveConfig({ originModels: { Opus: '(' } }), /originModels "Opus":/);
+    assert.throws(() => resolveConfig({ originModels: { Opus: '' } }), /needs a regex/);
+    assert.throws(() => resolveConfig({ originModels: { Opus: '(opus)?' } }), /needs a regex/);
+    assert.throws(() => resolveConfig({ originModels: 'opus' }), /must map/);
   });
 
   test('the window report shows origin rows only when origins were traced', () => {

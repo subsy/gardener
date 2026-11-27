@@ -18,7 +18,7 @@ import {
   readBlobs,
   rewrittenRanges,
 } from './git.mjs';
-import { originModel, quantile } from './sources.mjs';
+import { modelReader, quantile } from './sources.mjs';
 
 const TYPES = new Set([
   'feat',
@@ -185,15 +185,15 @@ export async function fixOrigins(cwd, config, fixes, prs, cache) {
 }
 
 /**
- * Per model that wrote them (read from each PR's description by `pattern`), how many of
- * `prs` merged and how many of those a fix in `origins` repaired. Most merged first.
+ * Per model that wrote them (read from each PR's description by `readModel`, see
+ * `modelReader`), how many of `prs` merged and how many of those a fix in `origins` repaired.
+ * Most merged first.
  */
-export function originModels(prs, origins, pattern) {
-  const re = new RegExp(pattern);
+export function originModels(prs, origins, readModel) {
   const repaired = new Set(origins.flatMap((o) => o.prs));
   const byModel = new Map();
   for (const pr of prs) {
-    const model = originModel(pr.body, re);
+    const model = readModel(pr.body);
     const row = byModel.get(model) ?? { model, merged: 0, repaired: 0 };
     row.merged += 1;
     if (repaired.has(pr.number)) row.repaired += 1;
@@ -309,7 +309,7 @@ async function traceOrigins(cwd, config, commits, fixes, cache, backlog, originP
   const merged = originPrs.filter((p) => p.mergeCommit && inWindow.has(p.mergeCommit.oid));
   return {
     fixOrigins: origins,
-    originModels: originModels(merged, origins, config.originModelPattern),
+    originModels: originModels(merged, origins, modelReader(config)),
   };
 }
 

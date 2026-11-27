@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, matchesGlob } from 'node:path';
 
 import { git } from './git.mjs';
+import { modelReader } from './sources.mjs';
 
 const CODE = '**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}';
 
@@ -68,6 +69,9 @@ export const DEFAULTS = {
   // With --github, the regex that reads the model that wrote a PR from its description: the
   // first capture group, on the last line that matches. Unmatched PRs are "Unattributed".
   originModelPattern: '^(.+?) via .+$',
+  // Instead, when set: display name -> regex (case-insensitive) naming that model anywhere in a
+  // line. The last line naming any is the attribution; the model named first in it wins.
+  originModels: {},
   // compare: touched files this share of all commits also change are too shared to attribute.
   sharedFileShare: 0.05,
   // Your own weeds: name -> regex, or { pattern, in, except } to count it only in some paths.
@@ -205,9 +209,8 @@ export function resolveConfig(user) {
       return [name, resolved];
     }),
   );
-  // Checked here, so a bad pattern fails before minutes of blame rather than after.
-  if (new RegExp(`${merged.originModelPattern}|`).exec('').length < 2)
-    throw new Error('originModelPattern needs a capture group for the model');
+  // Building the reader checks the origin patterns, so a bad one fails before minutes of blame.
+  modelReader(merged);
   merged.transcripts = { ...DEFAULTS.transcripts, ...user.transcripts };
   // Each cache keys on only the settings that change its results, so tuning a window or a
   // sample size keeps every cached commit.

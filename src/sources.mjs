@@ -144,21 +144,54 @@ export function backlogMergeCommits(prs, labels) {
 
 export const UNATTRIBUTED = 'Unattributed';
 
+// Case-insensitive always; a leading `(?i)`, which JavaScript lacks, is accepted and dropped.
+const modelRegex = (source) => new RegExp(source.replace(/^\(\?i\)/, ''), 'i');
+
 /**
- * The model a PR says wrote it: the first capture group of `pattern` on the last line of its
- * body that matches, read with surrounding whitespace and a trailing period trimmed and runs
- * of whitespace collapsed. `Unattributed` when no line matches; a model is never guessed.
- * `pattern` is a regex or its source.
+ * Reads the model a PR says wrote it from its body, scanning lines from the end, each with
+ * surrounding whitespace and a trailing period trimmed. With `originModels` (display name ->
+ * regex), the first line naming any of them is the attribution line, and the model whose match
+ * starts earliest in it wins (the implementer is named before the reviewers; on a tie, the one
+ * listed first). Otherwise the first line `originModelPattern` matches gives its first capture
+ * group, whitespace collapsed. `Unattributed` when no line names a model; a model is never
+ * guessed. Throws on a pattern that can't name a model.
  */
-export function originModel(body, pattern) {
-  const re = new RegExp(pattern);
-  const lines = String(body ?? '').split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i].trim().replace(/\.$/, '');
-    const model = re.exec(line)?.[1]?.replace(/\s+/g, ' ').trim();
-    if (model) return model;
-  }
-  return UNATTRIBUTED;
+export function modelReader({ originModelPattern, originModels }) {
+  if (typeof originModels !== 'object' || originModels === null || Array.isArray(originModels))
+    throw new Error('originModels must map display names to regexes');
+  const named = Object.entries(originModels).map(([name, source]) => {
+    let re;
+    try {
+      re = modelRegex(String(source));
+    } catch (error) {
+      throw new Error(`originModels "${name}": ${error.message}`);
+    }
+    // One that matches nothing in particular would claim every line.
+    if (typeof source !== 'string' || re.test(''))
+      throw new Error(`originModels "${name}" needs a regex that names the model`);
+    return [name, re];
+  });
+  const pattern = new RegExp(originModelPattern);
+  if (new RegExp(`${originModelPattern}|`).exec('').length < 2)
+    throw new Error('originModelPattern needs a capture group for the model');
+  const fromLine = named.length
+    ? (line) => {
+        let best = null;
+        for (const [name, re] of named) {
+          const at = re.exec(line)?.index;
+          if (at !== undefined && (best === null || at < best.at)) best = { name, at };
+        }
+        return best?.name;
+      }
+    : (line) => pattern.exec(line)?.[1]?.replace(/\s+/g, ' ').trim();
+  return (body) => {
+    const lines = String(body ?? '').split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const model = fromLine(lines[i].trim().replace(/\.$/, ''));
+      if (model) return model;
+    }
+    return UNATTRIBUTED;
+  };
 }
 
 /**
