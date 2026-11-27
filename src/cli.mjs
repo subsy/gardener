@@ -108,14 +108,19 @@ async function main() {
     const repo = values.github ? originRepo(cwd) : null;
     const merged = repo ? fetchMergedPrs(repo, since, now) : null;
     const backlog = backlogMergeCommits(merged, config.backlogLabels);
-    const outcomes = await windowOutcomes(cwd, config, since, now, cache, backlog);
+    // A fix can repair a PR merged up to reworkDays before the window opened.
+    const earlier = merged
+      ? fetchMergedPrs(repo, since - config.reworkDays * DAY, since, { mergesOnly: true })
+      : null;
+    const originPrs = merged ? [...earlier, ...merged] : null;
+    const outcomes = await windowOutcomes(cwd, config, since, now, cache, backlog, originPrs);
     cache.save();
     const prs = prOutcomes(merged);
     const { pushes, verification } = values.transcripts
       ? await agentOutcomes(config.transcripts, since, now)
       : { pushes: null, verification: null };
     print({ outcomes, prs, pushes, verification }, () =>
-      formatWindow(outcomes, prs, pushes, verification),
+      formatWindow(outcomes, prs, pushes, verification, config),
     );
   } else if (command === 'hotspots') {
     const spots = hotspots(

@@ -18,7 +18,7 @@ import {
   readBlobs,
   rewrittenRanges,
 } from './git.mjs';
-import { quantile } from './sources.mjs';
+import { modelReader, quantile } from './sources.mjs';
 
 const TYPES = new Set([
   'feat',
@@ -123,28 +123,85 @@ export async function mapLimit(items, limit, fn) {
 
 const CONCURRENCY = Math.max(2, availableParallelism());
 
-/** Lines one commit rewrote in existing files, and how many were under `reworkDays` old. */
-async function commitRework(cwd, commit, config, is, pathFilter) {
+/**
+ * Blames, in its first parent, the lines `commit` rewrote in existing churn files, walking back
+ * `reworkDays`: one `blameRecent` result per file, none for a root commit.
+ */
+async function blameRewritten(cwd, commit, config, is, { pathFilter = () => true, firstParent = false } = {}) {
   const parent = commit.parents[0];
-  if (!parent) return { lines: 0, recent: 0 };
+  if (!parent) return [];
   const paths = commit.files
     .filter((f) => f.deleted > 0 && is.isChurn(f.path) && pathFilter(f.path))
     .map((f) => f.path);
-  const ranges = await rewrittenRanges(cwd, parent, commit.sha, paths);
-  let lines = 0;
-  let recent = 0;
-  for (const [path, fileRanges] of ranges) {
-    const blamed = await blameRecent(
-      cwd,
-      parent,
-      path,
-      fileRanges,
-      commit.time - config.reworkDays * DAY,
+  const blamed = [];
+  for (const [path, fileRanges] of await rewrittenRanges(cwd, parent, commit.sha, paths))
+    blamed.push(
+      await blameRecent(cwd, parent, path, fileRanges, commit.time - config.reworkDays * DAY, {
+        firstParent,
+      }),
     );
-    lines += blamed.lines;
-    recent += blamed.recent;
+  return blamed;
+}
+
+/** Lines one commit rewrote in existing files, and how many were under `reworkDays` old. */
+async function commitRework(cwd, commit, config, is, pathFilter) {
+  const blamed = await blameRewritten(cwd, commit, config, is, { pathFilter });
+  return {
+    lines: blamed.reduce((sum, b) => sum + b.lines, 0),
+    recent: blamed.reduce((sum, b) => sum + b.recent, 0),
+  };
+}
+
+/**
+ * First-parent commits that owned lines `commit` rewrote while those lines were under
+ * `reworkDays` old: the recent work it repaired, sorted by SHA.
+ */
+async function repairedCommits(cwd, commit, config, is) {
+  const blamed = await blameRewritten(cwd, commit, config, is, { firstParent: true });
+  return [...new Set(blamed.flatMap((b) => Object.keys(b.owners)))].sort();
+}
+
+/**
+ * Origins of each fix commit: the merged PRs among `prs` whose merge commit owned lines the
+ * fix rewrote while they were under `reworkDays` old. Every fix is traced, not a sample; the
+ * owning commits are cached per fix (they never change), the PR numbers are not (PR data can).
+ * Returns [{ sha, prs: [numbers] }] in input order; a fix that repaired no PR's code has [].
+ */
+export async function fixOrigins(cwd, config, fixes, prs, cache) {
+  const is = classifiers(config);
+  const prByMerge = new Map(
+    prs.filter((p) => p.mergeCommit).map((p) => [p.mergeCommit.oid, p.number]),
+  );
+  return mapLimit(fixes, CONCURRENCY, async (commit) => {
+    const key = `origins:${commit.sha}`;
+    let owners = cache?.get(key);
+    if (!owners) {
+      owners = await repairedCommits(cwd, commit, config, is);
+      cache?.set(key, owners);
+    }
+    const numbers = new Set(owners.map((sha) => prByMerge.get(sha)).filter((n) => n != null));
+    return { sha: commit.sha, prs: [...numbers].sort((a, b) => a - b) };
+  });
+}
+
+/**
+ * Per model that wrote them (read from each PR's description by `readModel`, see
+ * `modelReader`), how many of `prs` merged and how many of those a fix in `origins` repaired.
+ * Most merged first.
+ */
+export function originModels(prs, origins, readModel) {
+  const repaired = new Set(origins.flatMap((o) => o.prs));
+  const byModel = new Map();
+  for (const pr of prs) {
+    const model = readModel(pr.body);
+    const row = byModel.get(model) ?? { model, merged: 0, repaired: 0 };
+    row.merged += 1;
+    if (repaired.has(pr.number)) row.repaired += 1;
+    byModel.set(model, row);
   }
-  return { lines, recent };
+  return [...byModel.values()].sort(
+    (a, b) => b.merged - a.merged || a.model.localeCompare(b.model),
+  );
 }
 
 /**
@@ -176,8 +233,10 @@ export async function rework(cwd, commits, config, { pathFilter, cache } = {}) {
 /**
  * Commit mix, net lines and rework for first-parent commits in [since, until). With `backlog`, the
  * merge commits of backlog PRs (`backlogMergeCommits`), also how many fix commits were backlog work.
+ * With `originPrs`, merged PRs reaching back `reworkDays` before `since`, also each non-backlog
+ * fix's origin PRs (`fixOrigins`) and, per model, the window's PRs and how many were repaired.
  */
-export async function windowOutcomes(cwd, config, since, until, cache, backlog = null) {
+export async function windowOutcomes(cwd, config, since, until, cache, backlog = null, originPrs = null) {
   const is = classifiers(config);
   const commits = logWindow(cwd, config.branch, since, until);
   const byType = {};
@@ -207,9 +266,10 @@ export async function windowOutcomes(cwd, config, since, until, cache, backlog =
   const sampleSize = config.reworkSample;
   const fixes = commits.filter((c) => commitType(c.subject) === 'fix');
   const total = commits.length;
-  const [allRework, fixRework] = await Promise.all([
+  const [allRework, fixRework, origins] = await Promise.all([
     rework(cwd, evenSample(commits, sampleSize), config, { cache }),
     rework(cwd, evenSample(fixes, sampleSize), config, { cache }),
+    originPrs && traceOrigins(cwd, config, commits, fixes, cache, backlog, originPrs),
   ]);
   // A share of a handful of commits or lines is noise: one fix in a quiet week reads 100%.
   const enough = total >= config.minCommits;
@@ -233,6 +293,26 @@ export async function windowOutcomes(cwd, config, since, until, cache, backlog =
       all: Math.min(total, sampleSize),
       fix: Math.min(fixes.length, sampleSize),
     },
+    ...origins,
+  };
+}
+
+/**
+ * The `fixOrigins` and `originModels` fields of a window. Backlog fixes are planned work, not
+ * escapes, so they aren't traced. Only PRs whose merge commit is one of the window's
+ * first-parent commits count as merged in it: a PR merged into another branch can't be repaired here.
+ */
+async function traceOrigins(cwd, config, commits, fixes, cache, backlog, originPrs) {
+  const traced = fixes.filter((c) => !backlog?.has(c.sha));
+  const origins = await fixOrigins(cwd, config, traced, originPrs, cache);
+  const inWindow = new Set(commits.map((c) => c.sha));
+  // Only the window's own PRs carry a description; one fetched as an earlier origin doesn't.
+  const merged = originPrs.filter(
+    (p) => 'body' in p && p.mergeCommit && inWindow.has(p.mergeCommit.oid),
+  );
+  return {
+    fixOrigins: origins,
+    originModels: originModels(merged, origins, modelReader(config)),
   };
 }
 

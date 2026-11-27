@@ -246,16 +246,22 @@ export async function rewrittenRanges(cwd, parent, sha, paths) {
 
 /**
  * Blames `ranges` of `path` at `rev`, walking history only back to `sinceEpoch`.
- * Returns { lines, recent }: lines blamed, and how many came from a commit after the limit.
+ * Returns { lines, recent, owners }: lines blamed, how many came from a commit after the
+ * limit, and those recent owners as { sha: lines }. With `firstParent`, a line is owned by
+ * the first-parent commit that brought it in (a PR's merge commit, not a commit on its branch).
  */
-export async function blameRecent(cwd, rev, path, ranges, sinceEpoch) {
+export async function blameRecent(cwd, rev, path, ranges, sinceEpoch, { firstParent = false } = {}) {
   const args = ['blame', '--porcelain', `--since=@${sinceEpoch}`];
+  if (firstParent) args.push('--first-parent');
   for (const [start, count] of ranges) args.push('-L', `${start},+${count}`);
   args.push(rev, '--', path);
   return parseBlamePorcelain(await gitAsync(cwd, args));
 }
 
-/** Counts porcelain blame lines, splitting those owned by boundary commits (older than the limit). */
+/**
+ * Counts porcelain blame lines, splitting those owned by boundary commits (older than the
+ * limit) from recent ones, and counts the recent lines per owning commit.
+ */
 export function parseBlamePorcelain(out) {
   const lineOwners = [];
   const boundary = new Set();
@@ -269,6 +275,9 @@ export function parseBlamePorcelain(out) {
       boundary.add(currentSha);
     }
   }
-  const recent = lineOwners.filter((sha) => !boundary.has(sha)).length;
-  return { lines: lineOwners.length, recent };
+  const owners = {};
+  for (const sha of lineOwners)
+    if (!boundary.has(sha)) owners[sha] = (owners[sha] ?? 0) + 1;
+  const recent = Object.values(owners).reduce((sum, n) => sum + n, 0);
+  return { lines: lineOwners.length, recent, owners };
 }
