@@ -110,7 +110,7 @@ async function main() {
     const backlog = backlogMergeCommits(merged, config.backlogLabels);
     // A fix can repair a PR merged up to reworkDays before the window opened.
     const earlier = merged
-      ? fetchMergedPrs(repo, since - config.reworkDays * DAY, since)
+      ? fetchMergedPrs(repo, since - config.reworkDays * DAY, since, { mergesOnly: true })
       : null;
     const originPrs = merged ? [...earlier, ...merged] : null;
     const outcomes = await windowOutcomes(cwd, config, since, now, cache, backlog, originPrs);

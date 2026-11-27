@@ -29,6 +29,15 @@ const PR_QUERY = `query($q: String!, $after: String) {
   }
 }`;
 
+// Enough to match a merge commit to its PR: the PRs merged before a window, that its fixes may repair.
+const MERGE_QUERY = `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { number mergeCommit { oid } } }
+  }
+}`;
+
 /** Value at quantile `q` of a numeric list, or null for an empty list. */
 export function quantile(values, q) {
   if (values.length === 0) return null;
@@ -57,10 +66,11 @@ export function fetchPr(cwd, number) {
 /**
  * Fetches PRs merged in [since, until) for `repo` ("owner/name"); null when gh isn't
  * installed. GitHub search returns at most 1,000 results, so keep windows to a few weeks.
+ * With `mergesOnly`, each PR carries only its number and merge commit.
  */
-export function fetchMergedPrs(repo, since, until) {
+export function fetchMergedPrs(repo, since, until, { mergesOnly = false } = {}) {
   try {
-    return searchMergedPrs(repo, since, until);
+    return searchMergedPrs(repo, since, until, mergesOnly ? MERGE_QUERY : PR_QUERY);
   } catch (error) {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -71,17 +81,17 @@ export function fetchMergedPrs(repo, since, until) {
 // part fits; a repository merging hundreds of PRs a day needs this every week.
 const SEARCH_CAP = 1000;
 
-function searchMergedPrs(repo, since, until) {
+function searchMergedPrs(repo, since, until, query) {
   const q = `repo:${repo} is:pr is:merged merged:${isoSeconds(since)}..${isoSeconds(until - 1)}`;
   const prs = [];
   let after = null;
   do {
-    const args = ['api', 'graphql', '-f', `query=${PR_QUERY}`, '-f', `q=${q}`];
+    const args = ['api', 'graphql', '-f', `query=${query}`, '-f', `q=${q}`];
     if (after) args.push('-f', `after=${after}`);
     const page = gh(args).data.search;
     if (!after && page.issueCount > SEARCH_CAP && until - since > 60) {
       const mid = since + Math.floor((until - since) / 2);
-      return [...searchMergedPrs(repo, since, mid), ...searchMergedPrs(repo, mid, until)];
+      return [...searchMergedPrs(repo, since, mid, query), ...searchMergedPrs(repo, mid, until, query)];
     }
     prs.push(...page.nodes.filter((n) => n.number));
     after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
@@ -138,6 +148,7 @@ export const UNATTRIBUTED = 'Unattributed';
  * The model a PR says wrote it: the first capture group of `pattern` on the last line of its
  * body that matches, read with surrounding whitespace and a trailing period trimmed and runs
  * of whitespace collapsed. `Unattributed` when no line matches; a model is never guessed.
+ * `pattern` is a regex or its source.
  */
 export function originModel(body, pattern) {
   const re = new RegExp(pattern);

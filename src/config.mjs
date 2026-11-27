@@ -205,6 +205,9 @@ export function resolveConfig(user) {
       return [name, resolved];
     }),
   );
+  // Checked here, so a bad pattern fails before minutes of blame rather than after.
+  if (new RegExp(`${merged.originModelPattern}|`).exec('').length < 2)
+    throw new Error('originModelPattern needs a capture group for the model');
   merged.transcripts = { ...DEFAULTS.transcripts, ...user.transcripts };
   // Each cache keys on only the settings that change its results, so tuning a window or a
   // sample size keeps every cached commit.

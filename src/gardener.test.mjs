@@ -783,6 +783,8 @@ describe('fix origins', () => {
     assert.equal(originModel('Fixes the login page.', pattern), 'Unattributed');
     assert.equal(originModel(null, pattern), 'Unattributed');
     assert.equal(originModel('Model: Fable 5.2', '^Model: (.+)$'), 'Fable 5.2');
+    assert.throws(() => resolveConfig({ originModelPattern: 'via .+' }), /capture group/);
+    assert.throws(() => resolveConfig({ originModelPattern: '(' }));
   });
 
   test('the window report shows origin rows only when origins were traced', () => {

@@ -123,33 +123,33 @@ export async function mapLimit(items, limit, fn) {
 
 const CONCURRENCY = Math.max(2, availableParallelism());
 
-/** Line ranges `commit` rewrote in existing churn files, in its first parent: Map(path -> ranges). */
-function churnRanges(cwd, commit, is, pathFilter = () => true) {
+/**
+ * Blames, in its first parent, the lines `commit` rewrote in existing churn files, walking back
+ * `reworkDays`: one `blameRecent` result per file, none for a root commit.
+ */
+async function blameRewritten(cwd, commit, config, is, { pathFilter = () => true, firstParent = false } = {}) {
+  const parent = commit.parents[0];
+  if (!parent) return [];
   const paths = commit.files
     .filter((f) => f.deleted > 0 && is.isChurn(f.path) && pathFilter(f.path))
     .map((f) => f.path);
-  return rewrittenRanges(cwd, commit.parents[0], commit.sha, paths);
+  const blamed = [];
+  for (const [path, fileRanges] of await rewrittenRanges(cwd, parent, commit.sha, paths))
+    blamed.push(
+      await blameRecent(cwd, parent, path, fileRanges, commit.time - config.reworkDays * DAY, {
+        firstParent,
+      }),
+    );
+  return blamed;
 }
 
 /** Lines one commit rewrote in existing files, and how many were under `reworkDays` old. */
 async function commitRework(cwd, commit, config, is, pathFilter) {
-  const parent = commit.parents[0];
-  if (!parent) return { lines: 0, recent: 0 };
-  const ranges = await churnRanges(cwd, commit, is, pathFilter);
-  let lines = 0;
-  let recent = 0;
-  for (const [path, fileRanges] of ranges) {
-    const blamed = await blameRecent(
-      cwd,
-      parent,
-      path,
-      fileRanges,
-      commit.time - config.reworkDays * DAY,
-    );
-    lines += blamed.lines;
-    recent += blamed.recent;
-  }
-  return { lines, recent };
+  const blamed = await blameRewritten(cwd, commit, config, is, { pathFilter });
+  return {
+    lines: blamed.reduce((sum, b) => sum + b.lines, 0),
+    recent: blamed.reduce((sum, b) => sum + b.recent, 0),
+  };
 }
 
 /**
@@ -157,21 +157,8 @@ async function commitRework(cwd, commit, config, is, pathFilter) {
  * `reworkDays` old: the recent work it repaired, sorted by SHA.
  */
 async function repairedCommits(cwd, commit, config, is) {
-  const parent = commit.parents[0];
-  if (!parent) return [];
-  const owners = new Set();
-  for (const [path, fileRanges] of await churnRanges(cwd, commit, is)) {
-    const blamed = await blameRecent(
-      cwd,
-      parent,
-      path,
-      fileRanges,
-      commit.time - config.reworkDays * DAY,
-      { firstParent: true },
-    );
-    for (const sha of Object.keys(blamed.owners)) owners.add(sha);
-  }
-  return [...owners].sort();
+  const blamed = await blameRewritten(cwd, commit, config, is, { firstParent: true });
+  return [...new Set(blamed.flatMap((b) => Object.keys(b.owners)))].sort();
 }
 
 /**
@@ -202,10 +189,11 @@ export async function fixOrigins(cwd, config, fixes, prs, cache) {
  * `prs` merged and how many of those a fix in `origins` repaired. Most merged first.
  */
 export function originModels(prs, origins, pattern) {
+  const re = new RegExp(pattern);
   const repaired = new Set(origins.flatMap((o) => o.prs));
   const byModel = new Map();
   for (const pr of prs) {
-    const model = originModel(pr.body, pattern);
+    const model = originModel(pr.body, re);
     const row = byModel.get(model) ?? { model, merged: 0, repaired: 0 };
     row.merged += 1;
     if (repaired.has(pr.number)) row.repaired += 1;
@@ -278,9 +266,10 @@ export async function windowOutcomes(cwd, config, since, until, cache, backlog =
   const sampleSize = config.reworkSample;
   const fixes = commits.filter((c) => commitType(c.subject) === 'fix');
   const total = commits.length;
-  const [allRework, fixRework] = await Promise.all([
+  const [allRework, fixRework, origins] = await Promise.all([
     rework(cwd, evenSample(commits, sampleSize), config, { cache }),
     rework(cwd, evenSample(fixes, sampleSize), config, { cache }),
+    originPrs && traceOrigins(cwd, config, commits, fixes, cache, backlog, originPrs),
   ]);
   // A share of a handful of commits or lines is noise: one fix in a quiet week reads 100%.
   const enough = total >= config.minCommits;
@@ -304,7 +293,7 @@ export async function windowOutcomes(cwd, config, since, until, cache, backlog =
       all: Math.min(total, sampleSize),
       fix: Math.min(fixes.length, sampleSize),
     },
-    ...(originPrs && (await traceOrigins(cwd, config, commits, fixes, cache, backlog, originPrs))),
+    ...origins,
   };
 }
 

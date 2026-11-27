@@ -404,16 +404,12 @@ export function freshFixShare(o) {
   return commits > 0 ? ((o.byType.fix ?? 0) - o.backlogFixes) / commits : null;
 }
 
-const backlogFixes = (o) => {
-  const fixes = o.byType.fix ?? 0;
-  return `${int(o.backlogFixes)} of ${int(fixes)}${fixes ? ` (${pct(o.backlogFixes / fixes)})` : ''}`;
-};
+const countOf = (n, total) => `${int(n)} of ${int(total)}${total ? ` (${pct(n / total)})` : ''}`;
 
-const repairedFixes = (o) => {
-  const repaired = o.fixOrigins.filter((f) => f.prs.length > 0).length;
-  const traced = o.fixOrigins.length;
-  return `${int(repaired)} of ${int(traced)}${traced ? ` (${pct(repaired / traced)})` : ''}`;
-};
+const backlogFixes = (o) => countOf(o.backlogFixes, o.byType.fix ?? 0);
+
+const repairedFixes = (o) =>
+  countOf(o.fixOrigins.filter((f) => f.prs.length > 0).length, o.fixOrigins.length);
 
 /** Per model that wrote the window's PRs: how many merged, and how many a later fix repaired. */
 const originModelTable = (o, days) =>
