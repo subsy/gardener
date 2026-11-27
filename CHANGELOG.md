@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/subsy/gardener/compare/v0.3.0...v0.4.0) (2026-11-27)
+
+
+### Features
+
+* read the origin model from named regexes with originModels, the model named first on the attribution line ([5f36fdc](https://github.com/subsy/gardener/commit/5f36fdc6c6048b6fc4d85f542cd1d67729721657))
+* trace each fix to the merged PRs whose fresh lines it rewrote, and report it per model ([69e6d66](https://github.com/subsy/gardener/commit/69e6d6691afec99d582a0b96c16c3c54b675b922))
+* trace each fix to the PRs whose fresh code it repaired, and total them per model ([c8674df](https://github.com/subsy/gardener/commit/c8674dfa981bcb57a5e3e26f8e7ed365c7bcf6fb))
+
+
+### Bug Fixes
+
+* count only PRs fetched with a description as merged per model, check originModelPattern only when it is used, and say origins are window-only ([fd179a0](https://github.com/subsy/gardener/commit/fd179a00b1df180dd04bd4935a6ea85345ef241a))
+
 ## [0.3.0](https://github.com/subsy/gardener/compare/v0.2.0...v0.3.0) (2026-11-25)
 
 
