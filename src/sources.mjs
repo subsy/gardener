@@ -17,7 +17,7 @@ const PR_QUERY = `query($q: String!, $after: String) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
-      number createdAt mergedAt
+      number createdAt mergedAt body
       mergeCommit { oid }
       labels(first: 20) { nodes { name } }
       closingIssuesReferences(first: 10) { nodes { labels(first: 20) { nodes { name } } } }
@@ -130,6 +130,24 @@ export function backlogMergeCommits(prs, labels) {
   return new Set(
     prs.filter((p) => p.mergeCommit && hasBacklogLabel(p, labels)).map((p) => p.mergeCommit.oid),
   );
+}
+
+export const UNATTRIBUTED = 'Unattributed';
+
+/**
+ * The model a PR says wrote it: the first capture group of `pattern` on the last line of its
+ * body that matches, read with surrounding whitespace and a trailing period trimmed and runs
+ * of whitespace collapsed. `Unattributed` when no line matches; a model is never guessed.
+ */
+export function originModel(body, pattern) {
+  const re = new RegExp(pattern);
+  const lines = String(body ?? '').split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim().replace(/\.$/, '');
+    const model = re.exec(line)?.[1]?.replace(/\s+/g, ' ').trim();
+    if (model) return model;
+  }
+  return UNATTRIBUTED;
 }
 
 /**

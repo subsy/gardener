@@ -65,6 +65,9 @@ export const DEFAULTS = {
   // turned up). With --github, fix commits whose PR carries one, or closes an issue that does, are
   // counted apart, so a week spent burning the backlog down doesn't read as new breakage.
   backlogLabels: [],
+  // With --github, the regex that reads the model that wrote a PR from its description: the
+  // first capture group, on the last line that matches. Unmatched PRs are "Unattributed".
+  originModelPattern: '^(.+?) via .+$',
   // compare: touched files this share of all commits also change are too shared to attribute.
   sharedFileShare: 0.05,
   // Your own weeds: name -> regex, or { pattern, in, except } to count it only in some paths.

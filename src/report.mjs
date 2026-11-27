@@ -409,8 +409,24 @@ const backlogFixes = (o) => {
   return `${int(o.backlogFixes)} of ${int(fixes)}${fixes ? ` (${pct(o.backlogFixes / fixes)})` : ''}`;
 };
 
-/** Terminal view of one outcome window. */
-export function formatWindow(o, prs, pushes, verification) {
+const repairedFixes = (o) => {
+  const repaired = o.fixOrigins.filter((f) => f.prs.length > 0).length;
+  const traced = o.fixOrigins.length;
+  return `${int(repaired)} of ${int(traced)}${traced ? ` (${pct(repaired / traced)})` : ''}`;
+};
+
+/** Per model that wrote the window's PRs: how many merged, and how many a later fix repaired. */
+const originModelTable = (o, days) =>
+  table(
+    ['Origin model', 'PRs merged', `Repaired within ${days} days`, 'Share'],
+    o.originModels.map((m) => [m.model, int(m.merged), int(m.repaired), pct(m.repaired / m.merged)]),
+  );
+
+/**
+ * Terminal view of one outcome window. `reworkDays` labels the origin rows, which show only
+ * when fix origins were traced (with --github).
+ */
+export function formatWindow(o, prs, pushes, verification, { reworkDays = 14 } = {}) {
   const share = (v) => (v == null ? 'Unmeasured' : pct(v));
   const reverts = o.reverts?.count
     ? `${int(o.reverts.count)} (${share(o.revertShare)})${o.reverts.medianHours == null ? '' : `, median ${hours(o.reverts.medianHours)} after the commit`}`
@@ -449,6 +465,9 @@ export function formatWindow(o, prs, pushes, verification) {
           `Same, in fix commits (${o.reworkSampled.fix} sampled)`,
           share(o.fixRework.share),
         ],
+        ...(o.fixOrigins
+          ? [[`Fix commits that repaired code under ${reworkDays} days old`, repairedFixes(o)]]
+          : []),
         ['Merged PRs', prs ? int(prs.prs) : 'Unmeasured'],
         ['Commits per PR, median / p90', spread(prs?.commitsPerPr)],
         [
@@ -470,6 +489,7 @@ export function formatWindow(o, prs, pushes, verification) {
         ],
       ],
     ),
+    ...(o.originModels?.length ? [originModelTable(o, reworkDays)] : []),
   ].join('\n\n');
 }
 

@@ -28,6 +28,7 @@ import {
   backlogMergeCommits,
   hasBacklogLabel,
   humanReviewed,
+  originModel,
   prOutcomes,
   verifyClassifier,
 } from './sources.mjs';
@@ -564,9 +565,11 @@ describe('parsing helpers', () => {
       `${b} 3 3 1`,
       'author Y',
       '\tline',
+      `${b} 4 4`,
+      '\tline',
       '',
     ].join('\n');
-    assert.deepEqual(parseBlamePorcelain(out), { lines: 3, recent: 1 });
+    assert.deepEqual(parseBlamePorcelain(out), { lines: 4, recent: 2, owners: { [b]: 2 } });
   });
 
   test('generated headers are recognised without catching ordinary mentions', () => {
@@ -691,6 +694,127 @@ describe('backlog fixes', () => {
     assert.match(text, /Fix share without backlog work\s+50\.0%/);
     assert.doesNotMatch(formatWindow({ ...o, backlogFixes: null }, prOutcomes([]), null), /backlog/);
     assert.equal(freshFixShare({ ...o, fixShare: null }), null);
+  });
+});
+
+describe('fix origins', () => {
+  // A 10-line file from PR #1, then PR #2 (a real merge commit, not a squash) rewrites lines 5
+  // and 6 seventeen days later. Three fixes follow three days after that.
+  async function originRepo() {
+    const r = repo();
+    const run = (args, at) =>
+      execFileSync('git', args, {
+        cwd: r.root,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_AUTHOR_DATE: `@${at} +0000`, GIT_COMMITTER_DATE: `@${at} +0000` },
+      }).trim();
+    r.write('src/a.ts', lines(10));
+    const base = r.commit('feat: base (#1)', T0);
+    run(['switch', '-q', '-c', 'pr-a'], T0);
+    r.write('src/a.ts', lines(10).replace('line5 = 5', 'line5 = 50').replace('line6 = 6', 'line6 = 60'));
+    r.commit('feat: a on its branch', T0 + 16 * DAY);
+    run(['switch', '-q', 'main'], T0);
+    run(['merge', '-q', '--no-ff', '-m', 'Merge pull request #2', 'pr-a'], T0 + 17 * DAY);
+    const a = run(['rev-parse', 'HEAD'], T0);
+    const edit = (from, to) => {
+      const path = join(r.root, 'src/a.ts');
+      writeFileSync(path, execFileSync('cat', [path], { encoding: 'utf8' }).replace(from, to));
+    };
+    edit('line5 = 50', 'line5 = 500');
+    const fresh = r.commit('fix: a three-day-old line (#3)', T0 + 20 * DAY);
+    edit('line0 = 0', 'line0 = 100');
+    const old = r.commit('fix: a twenty-day-old line (#4)', T0 + 20 * DAY + 3600);
+    edit('line6 = 60', 'line6 = 600');
+    const backlog = r.commit('fix: planned work (#5)', T0 + 20 * DAY + 7200);
+    const pr = (number, mergeCommit, body) => ({ number, mergeCommit: { oid: mergeCommit }, body });
+    const prs = [
+      pr(1, base, 'Claude Opus 5.5 via Claude Code (T3 Code).'),
+      pr(2, a, 'Adds a.\n\nClaude Opus 5.5 via Claude Code (T3 Code).'),
+      pr(3, fresh, null),
+      pr(4, old, 'Lane: GPT-6.2 Sol (Codex) via T3 Code'),
+      pr(5, backlog, ''),
+    ];
+    return { r, fresh, old, backlog, prs };
+  }
+
+  test('a fix traces to the PRs that wrote the fresh lines it rewrote, skipping backlog work', async () => {
+    const { r, fresh, old, backlog, prs } = await originRepo();
+    const since = T0 + 17 * DAY - 1;
+    const until = T0 + 21 * DAY;
+    const store = new Map();
+    const cache = { get: (k) => store.get(k), set: (k, v) => store.set(k, v) };
+    const o = await windowOutcomes(r.root, config(), since, until, cache, new Set([backlog]), prs);
+    assert.deepEqual(o.fixOrigins, [
+      { sha: fresh, prs: [2] },
+      // The line it rewrote came from PR #1, twenty days earlier: not under 14 days old.
+      { sha: old, prs: [] },
+    ]);
+    // PR #1 merged before the window: an origin can be, but it isn't counted as merged here.
+    assert.deepEqual(o.originModels, [
+      { model: 'Unattributed', merged: 2, repaired: 0 },
+      { model: 'Claude Opus 5.5', merged: 1, repaired: 1 },
+      { model: 'Lane: GPT-6.2 Sol (Codex)', merged: 1, repaired: 0 },
+    ]);
+    // The owning commits are cached per fix, so a re-run reads them back.
+    assert.ok(store.has(`origins:${fresh}`) && !store.has(`origins:${backlog}`));
+    const again = await windowOutcomes(r.root, config(), since, until, cache, new Set([backlog]), prs);
+    assert.deepEqual(again.fixOrigins, o.fixOrigins);
+
+    // Without PR data the window carries exactly the keys it always has.
+    const plain = await windowOutcomes(r.root, config(), since, until, cache, new Set([backlog]));
+    const keys = [
+      'since', 'until', 'commits', 'byType', 'fixShare', 'backlogFixes', 'cleanupShare',
+      'revertShare', 'reverts', 'lines', 'netDeletingShare', 'rework', 'fixRework', 'reworkSampled',
+    ];
+    assert.deepEqual(Object.keys(plain), keys);
+    assert.deepEqual(Object.keys(o), [...keys, 'fixOrigins', 'originModels']);
+    const { fixOrigins, originModels, ...rest } = o;
+    assert.deepEqual(rest, plain);
+  });
+
+  test('the model is read from the last matching line of the PR description', () => {
+    const pattern = resolveConfig({}).originModelPattern;
+    assert.equal(originModel('Claude Opus 5.5 via Claude Code (T3 Code).', pattern), 'Claude Opus 5.5');
+    assert.equal(originModel('Lane: GPT-6.2 Sol (Codex) via T3 Code', pattern), 'Lane: GPT-6.2 Sol (Codex)');
+    assert.equal(
+      originModel('Sent via the API\r\n\r\n  Claude   Opus 5.5 via Claude Code.  \r\n', pattern),
+      'Claude Opus 5.5',
+    );
+    assert.equal(originModel('Fixes the login page.', pattern), 'Unattributed');
+    assert.equal(originModel(null, pattern), 'Unattributed');
+    assert.equal(originModel('Model: Fable 5.2', '^Model: (.+)$'), 'Fable 5.2');
+  });
+
+  test('the window report shows origin rows only when origins were traced', () => {
+    const o = {
+      since: T0,
+      until: T0 + DAY,
+      commits: 4,
+      byType: { fix: 2, feat: 2 },
+      fixShare: 0.5,
+      backlogFixes: null,
+      cleanupShare: 0,
+      lines: { added: 0, deleted: 0, net: 0 },
+      rework: { share: null },
+      fixRework: { share: null },
+      reworkSampled: { all: 0, fix: 0 },
+    };
+    const traced = {
+      ...o,
+      fixOrigins: [{ sha: 'a', prs: [2, 7] }, { sha: 'b', prs: [] }],
+      originModels: [
+        { model: 'Claude Opus 5.5', merged: 4, repaired: 1 },
+        { model: 'Unattributed', merged: 1, repaired: 0 },
+      ],
+    };
+    const text = formatWindow(traced, prOutcomes([]), null, null, { reworkDays: 10 });
+    assert.match(text, /Fix commits that repaired code under 10 days old\s+1 of 2 \(50\.0%\)/);
+    assert.match(text, /Origin model\s+PRs merged\s+Repaired within 10 days\s+Share/);
+    assert.match(text, /Claude Opus 5\.5\s+4\s+1\s+25\.0%/);
+    assert.match(text, /Unattributed\s+1\s+0\s+0\.0%/);
+    const plain = formatWindow(o, prOutcomes([]), null, null, { reworkDays: 10 });
+    assert.doesNotMatch(plain, /repaired|Origin model/i);
+    assert.equal(plain, formatWindow(o, prOutcomes([]), null, null));
   });
 });
 
